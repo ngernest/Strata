@@ -5,6 +5,9 @@
 -/
 module
 
+public import Strata.DL.Lambda.LExpr
+public import Strata.DL.Lambda.LTy
+public import Strata.DL.Lambda.Factory
 import all Strata.DL.Lambda.Denote.LExprAnnotated
 import all Strata.DL.Lambda.Semantics
 import all Strata.DL.Lambda.TypeFactoryWF
@@ -61,7 +64,7 @@ def fvars_annotated_by [DecidableEq T.IDMeta]
 /-- Every `.op` node in `e` whose name is in the factory has a type annotation
 that is a valid instantiation of the function's generic type (via `opTypeSubst`).
 This is checked at every `.op` node directly, not just at complete calls. -/
-def OpsConsistent (F : @Factory T) : LExpr T.mono → Prop := fun e =>
+@[expose] public def OpsConsistent (F : @Factory T) : LExpr T.mono → Prop := fun e =>
   match e with
   | .op _ name ty =>
       match F[name.name]? with
@@ -84,7 +87,7 @@ def OpsConsistent (F : @Factory T) : LExpr T.mono → Prop := fun e =>
 /-- Declarative form of `OpsConsistent` as an inductive relation. The `.op` case
 requires that *some* type substitution turns the function's generic type into the
 node's annotation; operators not in the factory are unconstrained. -/
-inductive OpsConsistentR (F : @Factory T) : LExpr T.mono → Prop where
+public inductive OpsConsistentR (F : @Factory T) : LExpr T.mono → Prop where
   | const {m c} : OpsConsistentR F (.const m c)
   | bvar {m i} : OpsConsistentR F (.bvar m i)
   | fvar {m name ty} : OpsConsistentR F (.fvar m name ty)
@@ -108,7 +111,7 @@ inductive OpsConsistentR (F : @Factory T) : LExpr T.mono → Prop where
 omit [DecidableEq T.IDMeta] in
 /-- Soundness: `OpsConsistent` implies `OpsConsistentR`, using the substitution
 from `opTypeSubst` as the `.op` witness. -/
-theorem OpsConsistent_OpsConsistentR {F : @Factory T} :
+public theorem OpsConsistent_OpsConsistentR {F : @Factory T} :
     ∀ {e : LExpr T.mono}, OpsConsistent F e → OpsConsistentR F e := by
   intro e
   induction e with
