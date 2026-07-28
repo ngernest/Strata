@@ -64,7 +64,7 @@ def fvars_annotated_by [DecidableEq T.IDMeta]
 /-- Every `.op` node in `e` whose name is in the factory has a type annotation
 that is a valid instantiation of the function's generic type (via `opTypeSubst`).
 This is checked at every `.op` node directly, not just at complete calls. -/
-@[expose] public def OpsConsistent (F : @Factory T) : LExpr T.mono → Prop := fun e =>
+def OpsConsistent (F : @Factory T) : LExpr T.mono → Prop := fun e =>
   match e with
   | .op _ name ty =>
       match F[name.name]? with
@@ -111,7 +111,7 @@ public inductive OpsConsistentR (F : @Factory T) : LExpr T.mono → Prop where
 omit [DecidableEq T.IDMeta] in
 /-- Soundness: `OpsConsistent` implies `OpsConsistentR`, using the substitution
 from `opTypeSubst` as the `.op` witness. -/
-public theorem OpsConsistent_OpsConsistentR {F : @Factory T} :
+theorem OpsConsistent_OpsConsistentR {F : @Factory T} :
     ∀ {e : LExpr T.mono}, OpsConsistent F e → OpsConsistentR F e := by
   intro e
   induction e with
