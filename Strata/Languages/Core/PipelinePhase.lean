@@ -53,7 +53,10 @@ def obligationHasLabelPrefix (obligation : ProofObligation Expression)
     its model validation. This coupling ensures that adding a new transform
     also requires specifying its soundness annotation, and vice versa. -/
 structure PipelinePhase where
-  /-- The program-to-program transformation. -/
+  /-- The program-to-program transformation.
+      The `Bool` conservative reports whether the transformation changed
+      `CoreTransformState`, i.e. `true` indicates `CoreTransformState`
+      may have changed. -/
   transform : Program → Transform.CoreTransformM (Bool × Program)
   /-- The model validation for this phase. -/
   phase : AbstractedPhase

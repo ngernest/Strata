@@ -74,7 +74,14 @@ end FilterProcedures
 /-- FilterProcedures pipeline phase: restricts the program to the target
     procedures and their transitive callees. Model-preserving because it
     only removes procedures without changing the semantics of the
-    remaining ones. -/
+    remaining ones.
+
+    This function always conservatively reports
+
+    Always reports `changed = true`, including on inputs where no procedure is
+      pruned. `FilterProcedures.run` unconditionally rewrites the cached call
+      graph in `CoreTransformState`
+    -/
 def filterProceduresPipelinePhase (procs : List String)
     (respectNoFilter : Bool := true) : PipelinePhase :=
   modelPreservingPipelinePhase "FilterProcedures" fun prog => do

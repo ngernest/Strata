@@ -96,6 +96,19 @@ def CachedAnalyses.emp : CachedAnalyses := {}
   It is the duty of the transformation to update the analysis cache to keep the
   correct information after code transformation, or one can simply drop the
   cached result.
+
+  Note: Transformations that return `Bool × α` use the `Bool` to
+  indicate if the `CoreTransformState` was changed. This `Bool` is conservative,
+  i.e.:
+
+  * `true` means the transformation changed the `CoreTransformState` (and possibly
+     also the program itself)
+  * `false` means neither the `CoreTransformState` (and neither the program itself)
+      was modified
+
+    A transformation that leaves the program alone but uses the result from
+    a cached analysis must still return `true`, because a caller that skips
+    work on `false` (e.g. `runProgramUntil`) would otherwise observe a stale cache.
 -/
 structure CoreTransformState where
   genState: CoreGenState
@@ -303,7 +316,11 @@ private def runStmtsRec (f : Command → CoreTransformM (Option (List Statement)
 
 /--
 Run f on each command of the program.
-Returns (has the program updated?, the updated program).
+Returns a pair of the form
+(`Bool` indicating if `CoreProgramState` changed, the updated program).
+The `Bool` is conservative, as documented in `CoreTransformState`: it is
+`true` if `CoreProgramState` may have been modified, and `false` otherwise.
+
 If targetProcList is .none, apply f to all statements in every procedure.
 If targetProcList is .some l, apply f to statements that are in procedures
 listed in l only.
@@ -353,7 +370,13 @@ def runProgram
 /-- Repeatedly apply a command-level transformation until no more changes occur
     or the iteration limit is reached.
     - `maxIters = none`: repeat until a fixed point (no changes).
-    - `maxIters = some n`: run up to `n` iterations, stopping early if no change. -/
+    - `maxIters = some n`: run up to `n` iterations, stopping early if no change.
+
+    The early exit behavior relies on a conservative implementation of the `changed`
+    flag, as documented in `CoreTransformState`:
+    `true` indicates that `CoreTransformState` may have been changed,
+    while `false` guarantees that `CoreTranformState` wasn't changed,
+    indicating a no-op. -/
 def runProgramUntil
     (f : Command → CoreTransformM (Option (List Statement)))
     (p : Program)
