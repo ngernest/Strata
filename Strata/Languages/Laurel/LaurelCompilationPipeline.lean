@@ -9,7 +9,7 @@ public import Strata.Languages.Laurel.LaurelToCoreSchemaPass
 import Strata.Languages.Laurel.DesugarShortCircuit
 import Strata.Languages.Laurel.EliminateReturnStatements
 import Strata.Languages.Laurel.EliminateDoWhile
-import Strata.Languages.Laurel.EliminateIncrDecr
+import Strata.Languages.Laurel.EliminateIncrDecrAndCompoundAssign
 import Strata.Languages.Laurel.MergeAndLiftReturns
 import Strata.Languages.Laurel.EliminateValueInReturns
 import Strata.Languages.Laurel.ModifiesClauses
@@ -24,6 +24,7 @@ import Strata.Languages.Laurel.LiftImperativeExpressions
 import Strata.Languages.Laurel.InlineLocalVariables
 import Strata.Languages.Laurel.ConstrainedTypeElim
 import Strata.Languages.Laurel.ContractPass
+import Strata.Languages.Laurel.UniqueOverloadNames
 import Strata.Languages.Laurel.PushOldInward
 import Strata.Languages.Laurel.LiftInstanceProcedures
 import Strata.Languages.Laurel.TypeAliasElim
@@ -99,8 +100,9 @@ abbrev TranslateResultWithLaurel := (Option Core.Program) × (List DiagnosticMod
 
 /-- The ordered sequence of Laurel-to-Laurel lowering passes. -/
 def laurelPipeline : Array LoweringPass := #[
+  uniqueOverloadNamesPass,
   eliminateDoWhilePass,
-  eliminateIncrDecrPass,
+  eliminateIncrDecrAndCompoundAssignPass,
   typeAliasElimPass,
   constrainedTypeElimPass,
   mergeAndLiftReturnsPass,

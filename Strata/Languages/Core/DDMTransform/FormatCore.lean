@@ -6,6 +6,7 @@
 module
 
 public import Strata.Languages.Core.DDMTransform.Grammar
+public import Strata.Languages.Core.DDMTransform.FracLit
 public import Strata.Languages.Core.Procedure
 public import StrataDDM.Util.DecimalRat
 public import StrataDDM.Format
@@ -305,16 +306,12 @@ def lconstToExpr {M} [Inhabited M] (c : Lambda.LConst) :
     match StrataDDM.Decimal.fromRat r with
     | some d => pure (.realLit default ⟨default, d⟩)
     | none =>
-      -- `r` has no terminating decimal representation (e.g. `1/3`), so it
-      -- cannot be printed as a `realLit`. Emit the exact rational literal
-      -- `frac{num, den}` instead, which the transform maps back to `realConst
-      -- (mkRat num den)` and so round-trips to the same value. The `frac{...}`
-      -- operands are non-negative `Num` tokens, so a negative value is wrapped
-      -- in `neg_expr`, mirroring the `intConst` case above.
+      -- Exact rational literals that are not parsed by `Decimal.fromRat`.
       let ty := CoreType.tvar default unknownTypeVar
+      let (neg, num, den) := FracLit.fracEncode r
       let fracExpr :=
-        CoreDDM.Expr.fracLit default ⟨default, r.num.natAbs⟩ ⟨default, r.den⟩
-      if r.num < 0 then
+        CoreDDM.Expr.fracLit default ⟨default, num⟩ ⟨default, den⟩
+      if neg then
         pure (.neg_expr default ty fracExpr)
       else
         pure fracExpr
@@ -1056,7 +1053,7 @@ private inductive FormatParamKind where
   | inParam | outParam | inoutParam
 
 def procToCST {M} [Inhabited M] (proc : Core.Procedure)
-    (md : Imperative.MetaData Core.Expression := .empty) : ToCSTM M (Command M) := do
+    (md : Imperative.MetaData Core.Expression) : ToCSTM M (Command M) := do
   modify ToCSTContext.pushScope
   let name : Ann String M := ⟨default, proc.header.name.toPretty⟩
   let typeArgs := mkTypeArgsAnn proc.header.typeArgs
@@ -1225,7 +1222,7 @@ def Core.formatProcedure (proc : Core.Procedure)
   let initCtx := ToCSTContext.empty (M := SourceRange)
   let initCtx := { initCtx with annFilter }
   let initCtx := initCtx.addGlobalFreeVars extraFreeVars
-  let (cst, finalCtx) := (procToCST proc) initCtx
+  let (cst, finalCtx) := (procToCST proc .empty) initCtx
   formatWithDDM finalCtx fun ctx state =>
     (mformat (ArgF.op cst.toAst) ctx state).format
 

@@ -33,9 +33,6 @@ public section
 private def mdWithUnknownLoc : Imperative.MetaData Core.Expression :=
   Imperative.MetaData.ofProvenance (.synthesized .laurelToCore)
 
-def isFieldName (fieldNames : List Identifier) (name : Identifier) : Bool :=
-  fieldNames.contains name
-
 /-- Set of names that are translated to Core functions (not procedures) -/
 @[expose] abbrev FunctionNames := List Identifier
 
@@ -69,8 +66,11 @@ structure TranslateState where
       resolve to the (now non-functional) base procedure and wrongly reject it. -/
   procedureNames : Std.HashSet String := {}
 
-/-- The translation monad: state over Except, allowing both accumulated diagnostics and hard failures -/
-@[expose] abbrev TranslateM := OptionT (StateM TranslateState)
+/-- The translation monad: state with string-error abort for internal failures. -/
+@[expose] abbrev TranslateM := ExceptT String (StateM TranslateState)
+
+def isFieldName (fieldNames : List Identifier) (name : Identifier) : TranslateM Bool :=
+  fieldNames.anyM (fun f => liftM (m := Except String) (name.sameId f))
 
 /-- Whether `name` refers to one of the program's procedures (as opposed to a
     pure function application). See `TranslateState.procedureNames`. -/
@@ -134,8 +134,8 @@ private partial def mapConstValTy (model : SemanticModel) (arg : StmtExprMd) : T
   | _ => translateType (computeExprType model arg)
 
 /-- Run a `TranslateM` action, returning either a hard error or the result and final state -/
-def runTranslateM (s : TranslateState) (m : TranslateM α) : (Option α × TranslateState) :=
-  m s
+def runTranslateM (s : TranslateState) (m : TranslateM α) : (Except String α × TranslateState) :=
+  m.run s
 
 /-- Allocate a fresh unique ID. -/
 private def freshId : TranslateM Nat := do
@@ -144,8 +144,8 @@ private def freshId : TranslateM Nat := do
   set { s with nextId := id + 1 }
   return id
 
-/-- Throw a hard diagnostic error, aborting the current translation -/
-def throwExprDiagnostic (d : DiagnosticModel): TranslateM Core.Expression.Expr := do
+/-- Emit a diagnostic and continue with a default expression (does not abort). -/
+def emitExprDiagnostic (d : DiagnosticModel): TranslateM Core.Expression.Expr := do
   emitDiagnostic d
   emitCoreDiagnostic d
   return default
@@ -170,7 +170,7 @@ def translateExpr (expr : StmtExprMd)
   let model := s.model
   let md := astNodeToCoreMd expr
   let disallowed (source : Option FileRange) (msg : String) : TranslateM Core.Expression.Expr := do
-      throwExprDiagnostic $ diagnosticFromSource source msg
+      emitExprDiagnostic $ diagnosticFromSource source msg
 
   match h: expr.val with
   | .LiteralBool b => return .const () (.boolConst b)
@@ -180,18 +180,19 @@ def translateExpr (expr : StmtExprMd)
   | .LiteralBv value width => return .const () (.bitvecConst width (BitVec.ofNat width value))
   | .Var (.Local name) =>
       -- First check if this name is bound by an enclosing quantifier
-      match boundVars.findIdx? (· == name) with
-      | some idx =>
-          -- Bound variable: use de Bruijn index
-          return .bvar () idx
+      let mut bvarIdx : Option Nat := none
+      for bv in boundVars, idx in List.range boundVars.length do
+        if ← liftM (m := Except String) (name.sameId bv) then
+          bvarIdx := some idx
+          break
+      match bvarIdx with
+      | some idx => return .bvar () idx
       | none =>
         match model.get name with
-        | .field _ f =>
-            return .op () ⟨f.name.text, ()⟩ none
-        | astNode =>
-            return .fvar () ⟨name.text, ()⟩ (some (← translateType astNode.getType))
+        | .field _ f => return .op () ⟨f.name.text, ()⟩ none
+        | astNode => return .fvar () ⟨name.text, ()⟩ (some (← translateType astNode.getType))
   | .Var (.Declare _) =>
-      throwExprDiagnostic $ md.toDiagnostic "variable declaration in expression context should have been lowered" DiagnosticType.StrataBug
+      emitExprDiagnostic $ md.toDiagnostic "variable declaration in expression context should have been lowered" DiagnosticType.StrataBug
   | .PrimitiveOp op [e] _ =>
     match op with
     | .Not =>
@@ -203,7 +204,7 @@ def translateExpr (expr : StmtExprMd)
         | .TReal => true | _ => false
       return .app () (if isReal then realNegOp else intNegOp) re
     | _ =>
-      throwExprDiagnostic $ diagnosticFromSource expr.source s!"translateExpr: Invalid unary op: {repr op}" DiagnosticType.StrataBug
+      emitExprDiagnostic $ diagnosticFromSource expr.source s!"translateExpr: Invalid unary op: {repr op}" DiagnosticType.StrataBug
   | .PrimitiveOp op [e1, e2] skipProof =>
     let re1 ← translateExpr e1 boundVars isPureContext
     let re2 ← translateExpr e2 boundVars isPureContext
@@ -233,15 +234,15 @@ def translateExpr (expr : StmtExprMd)
     | .Geq => return binOp (if isReal then realGeOp else intGeOp)
     | .StrConcat => return binOp strConcatOp
     | _ =>
-        throwExprDiagnostic $ diagnosticFromSource expr.source s!"Invalid binary op: {repr op}" DiagnosticType.NotYetImplemented
+        emitExprDiagnostic $ diagnosticFromSource expr.source s!"Invalid binary op: {repr op}" DiagnosticType.NotYetImplemented
   | .PrimitiveOp op args _ =>
-      throwExprDiagnostic $ diagnosticFromSource expr.source s!"PrimitiveOp {repr op} with {args.length} args is not supported" DiagnosticType.UserError
+      emitExprDiagnostic $ diagnosticFromSource expr.source s!"PrimitiveOp {repr op} with {args.length} args is not supported" DiagnosticType.UserError
   | .IfThenElse cond thenBranch elseBranch =>
       let bcond ← translateExpr cond boundVars isPureContext
       let bthen ← translateExpr thenBranch boundVars isPureContext
       let belse ← match elseBranch with
         | none =>
-            throwExprDiagnostic $ diagnosticFromSource expr.source s!"if-then without else expression" DiagnosticType.NotYetImplemented
+            emitExprDiagnostic $ diagnosticFromSource expr.source s!"if-then without else expression" DiagnosticType.NotYetImplemented
         | some e =>
             have : sizeOf e < sizeOf expr := by
               have := AstNode.sizeOf_val_lt expr
@@ -296,8 +297,11 @@ def translateExpr (expr : StmtExprMd)
   | .Assign _ _ =>
       disallowed expr.source "destructive assignments are not supported in transparent bodies or contracts"
   | .IncrDecr _ _ _ =>
-      throwExprDiagnostic $ diagnosticFromSource expr.source
-        "IncrDecr should have been eliminated by EliminateIncrDecr pass" DiagnosticType.StrataBug
+      emitExprDiagnostic $ diagnosticFromSource expr.source
+        "IncrDecr should have been eliminated by EliminateIncrDecrAndCompoundAssign pass" DiagnosticType.StrataBug
+  | .CompoundAssign _ _ _ =>
+      emitExprDiagnostic $ diagnosticFromSource expr.source
+        "CompoundAssign should have been eliminated by EliminateIncrDecrAndCompoundAssign pass" DiagnosticType.StrataBug
   | .While _ _ _ _ _ =>
       disallowed expr.source "loops are not supported in transparent bodies or contracts"
   | .Exit _ => disallowed expr.source "exit is not supported in expression position"
@@ -331,21 +335,21 @@ def translateExpr (expr : StmtExprMd)
   | .Var (.Field target fieldId) =>
       -- Field selects should have been eliminated by heap parameterization
       -- If we see one here, it's an error in the pipeline
-      throwExprDiagnostic $ diagnosticFromSource expr.source s!"FieldSelect should have been eliminated by heap parameterization: {Std.ToFormat.format target}#{fieldId.text}" DiagnosticType.StrataBug
+      emitExprDiagnostic $ diagnosticFromSource expr.source s!"FieldSelect should have been eliminated by heap parameterization: {Std.ToFormat.format target}#{fieldId.text}" DiagnosticType.StrataBug
   | .Block (⟨ .Assign _ _, assignSource⟩ :: tail) _ =>
       disallowed assignSource "destructive assignments are not supported in transparent bodies or contracts"
   | .Block (⟨ .While _ _ _ _ _, whileSource⟩ :: tail) _ =>
       disallowed whileSource "loops are not supported in functions or contracts"
   | .Block (head :: tail) _ =>
-      throwExprDiagnostic $ diagnosticFromSource expr.source s!"block expression starting with {head.val.constructorName} should have been lowered in a separate pass" DiagnosticType.StrataBug
+      emitExprDiagnostic $ diagnosticFromSource expr.source s!"block expression starting with {head.val.constructorName} should have been lowered in a separate pass" DiagnosticType.StrataBug
   | .Block [] _ =>
-      throwExprDiagnostic $ diagnosticFromSource expr.source "empty block expression should have been lowered in a separate pass" DiagnosticType.StrataBug
-  | .Return _ => disallowed expr.source "return expression should be lowered in a separate pass"
+      emitExprDiagnostic $ diagnosticFromSource expr.source "empty block expression should have been lowered in a separate pass" DiagnosticType.StrataBug
+  | .Return _ => emitExprDiagnostic $ diagnosticFromSource expr.source "return statement-expression should be lowered in a separate pass" DiagnosticType.StrataBug
   | .IsType _ _ =>
-      throwExprDiagnostic $ diagnosticFromSource expr.source "IsType should have been lowered" DiagnosticType.StrataBug
-  | .New _ => throwExprDiagnostic $ diagnosticFromSource expr.source s!"New should have been eliminated by typeHierarchyTransform" DiagnosticType.StrataBug
-  | .AsType target _ => throwExprDiagnostic $ diagnosticFromSource expr.source "AsType expression translation" DiagnosticType.NotYetImplemented
-  | .Assigned _ => throwExprDiagnostic $ diagnosticFromSource expr.source "assigned expression translation" DiagnosticType.NotYetImplemented
+      emitExprDiagnostic $ diagnosticFromSource expr.source "IsType should have been lowered" DiagnosticType.StrataBug
+  | .New _ => emitExprDiagnostic $ diagnosticFromSource expr.source s!"New should have been eliminated by typeHierarchyTransform" DiagnosticType.StrataBug
+  | .AsType target _ => emitExprDiagnostic $ diagnosticFromSource expr.source "AsType expression translation" DiagnosticType.NotYetImplemented
+  | .Assigned _ => emitExprDiagnostic $ diagnosticFromSource expr.source "assigned expression translation" DiagnosticType.NotYetImplemented
   | .Old value =>
       -- `pushOldInward` is expected to leave every `Old` wrapping `Var (Local n)`
       -- with `n` an inout parameter of the enclosing procedure. We do not rely on
@@ -357,7 +361,7 @@ def translateExpr (expr : StmtExprMd)
       | .Var (.Local name) =>
           let inouts := s.currentProcInouts
           if !inouts.contains name.text then
-            throwExprDiagnostic $ diagnosticFromSource expr.source
+            emitExprDiagnostic $ diagnosticFromSource expr.source
               s!"old({name.text}) refers to a name that is not an inout parameter \
                  of the enclosing procedure (inouts: {inouts}). This violates the \
                  pushOldInward normalization invariant."
@@ -366,20 +370,20 @@ def translateExpr (expr : StmtExprMd)
             let coreTy ← translateType (model.get name).getType
             return .fvar () (Core.CoreIdent.mkOld name.text) (some coreTy)
       | _ =>
-          throwExprDiagnostic $ diagnosticFromSource expr.source
+          emitExprDiagnostic $ diagnosticFromSource expr.source
             "old(...) should have been pushed inward to a variable reference. \
              This violates the pushOldInward normalization invariant."
             DiagnosticType.StrataBug
-  | .Fresh _ => throwExprDiagnostic $ diagnosticFromSource expr.source "fresh expression translation" DiagnosticType.NotYetImplemented
-  | .Assert .. => throwExprDiagnostic $ diagnosticFromSource expr.source "assert expression translation" DiagnosticType.NotYetImplemented
-  | .Assume _ => throwExprDiagnostic $ diagnosticFromSource expr.source "assume expression translation" DiagnosticType.NotYetImplemented
-  | .ProveBy value _ => throwExprDiagnostic $ diagnosticFromSource expr.source "proveBy expression translation" DiagnosticType.NotYetImplemented
-  | .ContractOf _ _ => throwExprDiagnostic $ diagnosticFromSource expr.source "contractOf expression translation" DiagnosticType.NotYetImplemented
-  | .Abstract => throwExprDiagnostic $ diagnosticFromSource expr.source "abstract expression translation" DiagnosticType.NotYetImplemented
-  | .All => throwExprDiagnostic $ diagnosticFromSource expr.source "all expression translation" DiagnosticType.NotYetImplemented
-  | .InstanceCall target callee args => throwExprDiagnostic $ diagnosticFromSource expr.source "instance call expression translation" DiagnosticType.NotYetImplemented
-  | .PureFieldUpdate _ _ _ => throwExprDiagnostic $ diagnosticFromSource expr.source "pure field update expression translation" DiagnosticType.NotYetImplemented
-  | .This => throwExprDiagnostic $ diagnosticFromSource expr.source "this expression translation" DiagnosticType.NotYetImplemented
+  | .Fresh _ => emitExprDiagnostic $ diagnosticFromSource expr.source "fresh expression translation" DiagnosticType.NotYetImplemented
+  | .Assert .. => emitExprDiagnostic $ diagnosticFromSource expr.source "assert expression translation" DiagnosticType.NotYetImplemented
+  | .Assume _ => emitExprDiagnostic $ diagnosticFromSource expr.source "assume expression translation" DiagnosticType.NotYetImplemented
+  | .ProveBy value _ => emitExprDiagnostic $ diagnosticFromSource expr.source "proveBy expression translation" DiagnosticType.NotYetImplemented
+  | .ContractOf _ _ => emitExprDiagnostic $ diagnosticFromSource expr.source "contractOf expression translation" DiagnosticType.NotYetImplemented
+  | .Abstract => emitExprDiagnostic $ diagnosticFromSource expr.source "abstract expression translation" DiagnosticType.NotYetImplemented
+  | .All => emitExprDiagnostic $ diagnosticFromSource expr.source "all expression translation" DiagnosticType.NotYetImplemented
+  | .InstanceCall target callee args => emitExprDiagnostic $ diagnosticFromSource expr.source "instance call expression translation" DiagnosticType.NotYetImplemented
+  | .PureFieldUpdate _ _ _ => emitExprDiagnostic $ diagnosticFromSource expr.source "pure field update expression translation" DiagnosticType.NotYetImplemented
+  | .This => emitExprDiagnostic $ diagnosticFromSource expr.source "this expression translation" DiagnosticType.NotYetImplemented
   termination_by expr
   decreasing_by
     all_goals (have := AstNode.sizeOf_val_lt expr; term_by_mem)
@@ -681,7 +685,8 @@ are emitted into the monad state.
 def translateProcedure (proc : Procedure) : TranslateM Core.Procedure := do
   -- Track inout parameter names for the `.Old (Var (Local n))` defensive check.
   -- Reset to [] after the procedure so siblings start fresh.
-  modify fun s => { s with currentProcInouts := procInoutNames proc }
+  let inouts ← liftM (m := Except String) (procInoutNames proc)
+  modify fun s => { s with currentProcInouts := inouts }
   let inputPairs ← proc.inputs.mapM translateParameterToCore
   let inputs := inputPairs
   let outputs ← proc.outputs.mapM translateParameterToCore
@@ -878,7 +883,7 @@ def translateLaurelToCore (options: LaurelTranslateOptions) (ordered : CoreWithL
   pure { decls := coreDecls }
 
 public def laurelToCoreSchemaPass : LaurelPass CoreWithLaurelTypes Core.Program where
-  name := "LaurelToCoreSchemaPass"
+  name := "LaurelToCoreSchema"
   comesBefore := []
   documentation := "Produce a `Core` program from a `CoreWithLaurelTypes` program. Intended to be dumb 1-to-1 translation. However, there are several smart translations still happening:
   - The @[cases] parameter is inferred for recursive functions.
@@ -890,13 +895,17 @@ public def laurelToCoreSchemaPass : LaurelPass CoreWithLaurelTypes Core.Program 
       | _ => r) {}
     let initState : TranslateState :=
       { model := fnModel, overflowChecks := options.overflowChecks, procedureNames }
-    let (coreProgramOption, translateState) :=
+    let (coreProgramResult, translateState) :=
       runTranslateM initState (translateLaurelToCore options p)
     let diagnostics : List DiagnosticModel :=
       -- Because of the duplication between functions and procedures, this translation is liable to create duplicate diagnostics
       let d := translateState.diagnostics.eraseDups
       if d.isEmpty then translateState.coreDiagnostics else d
-    (coreProgramOption.getD default, diagnostics, {})
+    match coreProgramResult with
+    | .ok coreProgram => (coreProgram, diagnostics, {})
+    | .error e =>
+      let diag := DiagnosticModel.fromMessage s!"Internal error in LaurelToCoreSchema: {e}" .StrataBug
+      (default, diagnostics ++ [diag], {})
 
 end -- public section
 end Laurel

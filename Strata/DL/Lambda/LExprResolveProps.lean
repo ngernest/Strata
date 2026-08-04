@@ -33,38 +33,23 @@ the *same* underlying expression.
 
 `resolve_HasType` (in `LExprTypeSpec`) proves full polymorphic typing
 (`HasType`) for the input but requires `WellScoped`, `allKeysFresh`, and
-`checkContextTypesClosed` assumptions. `resolve_HasTypeA` here proves
-annotation-consistency (`HasTypeA`) for the output under different assumptions:
-`TEnvWF`, `FactoryWF`, and `AliasesResolved`. It drops the scoping/freshness/
-closure conditions but adds `AliasesResolved`, which `resolve_HasType` does not
-need.
+`checkContextTypesClosed`. `resolve_HasTypeA` here proves annotation-consistency
+(`HasTypeA`) for the output under a different set: `TEnvWF`, `FactoryWF`, and
+`AliasesResolved`.
 
 ### Proof structure of `resolve_HasTypeA`
 
-The proof proceeds in layers:
-
-1. **Alias-free infrastructure** (in `LExprAliasFree`):
-`resolveAliases_aliasFree`,`resolveAliases_output_aliasFree`,
-`instantiateWithCheck_aliasFree`,`typeBoundVar_xty_aliasFree`.
-We need alias-freeness because `inferFVar` on a
-monomorphic scheme `∀[]. xty` is only a no-op (returning exactly `xty`) when
-`xty` is alias-free. Without this, the `fvar` case of the main induction cannot
-conclude that the metadata annotation equals the context type.
-
+1. **Alias-free infrastructure** (in `LExprAliasFree`, e.g. `resolveAliases_aliasFree`,
+   `instantiateWithCheck_aliasFree`): `inferFVar` on a monomorphic scheme `∀[]. xty`
+   is a no-op only when `xty` is alias-free, which the `fvar` case relies on.
 2. **`allFvarAnnot` and `varCloseT`** (`resolveAux_allFvarAnnot`,
-`varCloseT_unresolved_HasTypeA`).
-The abs/quant cases of `resolveAux` open a bound variable as a fresh fvar,
-recurse, then close it. To show the result is well-annotated, we need (a) that
-`resolveAux` annotates every free occurrence of the fresh variable with its
-type, and (b) that closing turns these into correctly-indexed bvars in the
-`HasTypeA` sense.
-
-3. **Main induction** (`resolveAux_HasTypeA_aux`). Our result is generalized
- over an arbitrary substitution `S` absorbing the output, rather than fixing
-`S` to be the final substitution. This generalization is essential:
-`resolveAux` recurses on sub-expressions whose output substitutions are smaller
-than the final one, and the IH must apply to each sub-result under the caller's
-(larger) substitution.
+   `varCloseT_unresolved_HasTypeA`): the abs/quant cases open a bound variable as a
+   fresh fvar, recurse, then close it, so we need that `resolveAux` annotates every
+   occurrence of that variable and that closing yields correctly-indexed bvars.
+3. **Main induction** (`resolveAux_HasTypeA_aux`), generalized over an arbitrary
+   substitution `S` absorbing the output rather than the final substitution — sub-
+   expressions have smaller output substitutions, so the IH must apply under the
+   caller's larger one.
 -/
 
 namespace Lambda
@@ -75,7 +60,7 @@ section
 
 variable {T : LExprParams} [Std.ToFormat T.IDMeta]
 
-/-! ### Layer 2: `allFvarAnnot`, `varCloseT`, and structural helpers -/
+/-! ### `allFvarAnnot`, `varCloseT`, and structural helpers -/
 omit [Std.ToFormat T.IDMeta] in
 /-- Type substitution commutes with variable closing: substituting metadata types
     and then closing a free variable is the same as closing first then substituting. -/
@@ -323,8 +308,8 @@ private theorem resolveAux_allFvarAnnot_aux
     have h_ih_body := h_ih xv xty h_ctx1 h_af1
     exact allFvarAnnot_varCloseT_ne xv xvb xty 0 et_body h_ih_body
   case h_quant =>
-    intro m qk name bty triggers body et C Env Env' xvb xtyb Env1 et_body Env2 et_tr Env3
-      h_res h_tbv h_res_body h_res_tr h_et h_env' _ h_envwf h_ne h_fwf h_envwf1 h_ne1 h_aliases_eq
+    intro m qk name bty triggers body et C Env Env' xvb xtyb Env1 et_body Env2 et_tr Env3 substInfo
+      h_res h_tbv h_res_body h_res_tr _ h_et _ _ h_envwf h_ne h_fwf h_envwf1 h_ne1 h_aliases_eq
       h_envwf2 h_ctx2 h_ih_body h_ih_tr xv xty h_ctx h_af
     subst h_et
     simp only [LExprT.allFvarAnnot]
@@ -683,13 +668,10 @@ theorem resolve_TEnvWF [DecidableEq T.IDMeta] [HasGen T.IDMeta]
       · rename_i h_not_empty; intro h_abs; simp_all; contradiction
     exact resolveAux_TEnvWF e et C Env0 Env_out h_res h_envwf0 h_ne0 h_fwf
 
-/-- Bundle of `resolve`-level preservation facts (companion to `resolve_TEnvWF`),
-    lifted from `resolveAux_properties` through the initial-context guard:
+/-- Bundle of `resolve`-level preservation facts (companion to `resolve_TEnvWF`):
     the generator counter is monotone, the context's aliases stay resolved, and
     every free variable of the resolved output type is gen-fresh for the output
-    state. The last fact is needed to discharge the constraint-freshness
-    precondition of `unify_preserves_SubstFreshForGen` for the body's inferred
-    type. -/
+    state. -/
 theorem resolve_properties [DecidableEq T.IDMeta] [HasGen T.IDMeta]
     (e : LExpr T.mono) (e_typed : LExprT T.mono) (C : LContext T)
     (Env Env' : TEnv T.IDMeta)
@@ -1075,32 +1057,12 @@ theorem typeBoundVar_knownTypeVars_cases [DecidableEq T.IDMeta] [HasGen T.IDMeta
     · left; rw [← h_ctx_tg]; exact h_old
     · right; simpa only [LTy.freeVars, List.removeAll_nil] using h_new
 
-/-- **Predicate-closure of `resolve`.** For any predicate `P` on type variables that
-    is closed over the input context's known type variables and the input
+/-- **Predicate-closure of `resolve`.** For any predicate `P` on type variables
+    closed over the input context's known type variables and the input
     substitution's range, `resolve` keeps `P` holding on (i) every free variable of
     the resolved output type and (ii) every range variable of the output
-    substitution. This is the *positive* companion to `resolve_properties`'s
-    gen-freshness conjunct: where that says "output vars are not future gen-names",
-    this propagates an *arbitrary* invariant `P`. Instantiated with
-    `P v := v ∉ func.typeArgs`, it shows the body's resolved type never mentions a
-    user type argument (the formals were monomorphized to fresh `$__ty` vars before
-    resolution), which is what makes `v_unify`'s range disjoint from `func.typeArgs`.
-
-    PROOF PLAN (deferred — `sorry` with concrete plan, see ALPHAEQUIV_RENAMESUBST_PLAN.md
-    §10m): lift the existing `resolveAux_properties` size-induction skeleton
-    (LExprTypeSpec:3606) with `P` as an extra threaded invariant. The three and only
-    type-variable entry points each preserve `P`:
-    (i) the context — preserved because `resolveAux` does not change the context
-        (`ResolveAuxProperties.context`) and new bound-var bindings come from
-        `typeBoundVar`/`genTyVar`/`instantiateWithCheck`;
-    (ii) `genTyVar` — fresh `$__ty` vars; for `P = (· ∉ typeArgs)` these satisfy `P`
-        by `genTyVars_prefixed` + `LFuncWF.typeArgs_no_gen_prefix`;
-    (iii) annotations via `LMonoTy.instantiateWithCheck` — its output freeVars ⊆
-        `freshtvs` by `LMonoTy.freeVars_subst_closed`, hence `$__ty`, hence `P`;
-        `resolveAliases` introduces no new var (`TypeAlias.WF.fvs_closed` +
-        `TypeAlias.expand` ⟹ `freeVars(expand) ⊆ freeVars(args)`).
-    The `app`/`eq`/`ite` cases compose recursion with `Constraints.unify_pred`
-    (the unify step preserves `P` from constraint+input-subst to result-subst). -/
+    substitution. Instantiated with `P v := v ∉ func.typeArgs`, it shows the body's
+    resolved type never mentions a user type argument. -/
 theorem resolve_freeVars_pred [DecidableEq T.IDMeta] [HasGen T.IDMeta]
     (e : LExpr T.mono) (e_typed : LExprT T.mono) (C : LContext T)
     (Env Env' : TEnv T.IDMeta)
@@ -1112,11 +1074,9 @@ theorem resolve_freeVars_pred [DecidableEq T.IDMeta] [HasGen T.IDMeta]
     (h_ctx : ∀ v, v ∈ TContext.knownTypeVars Env.context → P v)
     (h_sub : ∀ v, (v ∈ Maps.keys Env.stateSubstInfo.subst ∨
                     v ∈ Subst.freeVars Env.stateSubstInfo.subst) → P v)
-    -- `P` holds on every generated type variable. FALSE without this (an unannotated binder's
-    -- `genTyVar` injects a fresh `$__ty<k>` into the output type, unconstrained by `h_ctx`/`h_sub`;
-    -- for `P := fun _ => False` the conclusion is refuted). At the sole call site
-    -- (`vunify_avoids_typeArgs`, `P := (·∉typeArgs)`) discharged by `genTyVars_prefixed` +
-    -- `LFuncWF.typeArgs_no_gen_prefix` (the gen-prefix guard, extracted from `h`).
+    -- `P` holds on every generated type variable. Required: an unannotated binder's
+    -- `genTyVar` injects a fresh `$__ty<k>` into the output type that is unconstrained
+    -- by `h_ctx`/`h_sub`, so without this `P := fun _ => False` refutes the conclusion.
     (h_gen : ∀ v (k : Nat), v = TState.tyPrefix ++ toString k → P v) :
     (∀ v, v ∈ LMonoTy.freeVars e_typed.toLMonoTy → P v) ∧
     (∀ v, (v ∈ Maps.keys Env'.stateSubstInfo.subst ∨
@@ -1368,8 +1328,8 @@ theorem resolve_freeVars_pred [DecidableEq T.IDMeta] [HasGen T.IDMeta]
         · exact h_ih'.2 v (Or.inr h_sub2)
       · rw [h_erase_subst] at hv; exact h_ih'.2 v hv
     case h_quant =>
-      intro m qk name bty triggers body et C Env Env' xv xty Env1 et_body Env2 et_tr Env3
-        h_res h_tbv h_res_body h_res_tr h_et h_env' h_body_ty_bool h_envwf h_ne h_fwf
+      intro m qk name bty triggers body et C Env Env' xv xty Env1 et_body Env2 et_tr Env3 substInfo
+        h_res h_tbv h_res_body h_res_tr h_unify h_et h_env' h_abs32 h_envwf h_ne h_fwf
         h_envwf1 h_ne1 h_aliases_eq h_envwf2 h_ctx2 h_ih_body h_ih_tr h_ctx h_sub
       subst h_et h_env'
       have h_aw := h_envwf.aliasesWF
@@ -1394,12 +1354,30 @@ theorem resolve_freeVars_pred [DecidableEq T.IDMeta] [HasGen T.IDMeta]
       have h_ctx2' : ∀ v, v ∈ TContext.knownTypeVars Env2.context → P v := by
         rw [h_ctx2]; exact h_ctx1
       have h_ih_tr' := h_ih_tr h_ctx2' h_ih_body'.2
-      have h_erase_subst : (Env3.eraseFromContext xv).stateSubstInfo = Env3.stateSubstInfo := by
-        simp only [TEnv.eraseFromContext, TEnv.updateContext]
+      -- The result subst is `substInfo` from unifying `[(et_body.toLMonoTy, bool)]`;
+      -- `updateSubst`/`eraseFromContext` set the subst to `substInfo.subst`.
+      have h_erase_subst : ((Env3.updateSubst substInfo).eraseFromContext xv).stateSubstInfo
+          = substInfo := by
+        simp only [TEnv.eraseFromContext, TEnv.updateContext, TEnv.updateSubst]
       refine ⟨fun v hv => ?_, fun v hv => ?_⟩
       · simp only [toLMonoTy, LMonoTy.freeVars, LMonoTys.freeVars] at hv
         exact absurd hv (by simp)
-      · rw [h_erase_subst] at hv; exact h_ih_tr'.2 v hv
+      · rw [h_erase_subst] at hv
+        -- `substInfo = unify [(et_body.toLMonoTy, bool)] Env3.stateSubstInfo`; its
+        -- key/free vars are covered by the trigger IH's subst-closure (which subsumes
+        -- Env3) plus the body's result-type freeVars (bool contributes none).
+        have h_cs_P : ∀ w, w ∈ Constraints.freeVars [(et_body.toLMonoTy, LMonoTy.bool)] → P w := by
+          intro w hw
+          -- `bool` contributes no free vars, so the constraint's freeVars reduce to
+          -- `et_body.toLMonoTy.freeVars`, covered by the body IH's result-type closure.
+          simp only [Constraints.freeVars, Constraint.freeVars, LMonoTy.bool,
+            LMonoTy.freeVars, LMonoTys.freeVars, List.append_nil] at hw
+          exact h_ih_body'.1 w hw
+        have h_unify_pred := Constraints.unify_pred h_unify P h_cs_P
+          (fun w hw => h_ih_tr'.2 w (Or.inl hw)) (fun w hw => h_ih_tr'.2 w (Or.inr hw))
+        rcases hv with hv | hv
+        · exact h_unify_pred.1 v hv
+        · exact h_unify_pred.2 v hv
     case h_eq =>
       intro m e1 e2 et C Env Env' e1t Env1 e2t Env2 substInfo
         h_res h1 h2 h_unify h_et h_subeq h_abs1 h_abs2
@@ -1510,7 +1488,7 @@ theorem resolve_freeVars_pred [DecidableEq T.IDMeta] [HasGen T.IDMeta]
     · exact h_aux_res.1 v h_t
     · exact h_aux_res.2 v (Or.inr h_s)
 
-/-! ### Layer 3: Main induction -/
+/-! ### Main induction -/
 
 /-- Core soundness lemma: for any substitution `S` absorbing the output substitution,
     the resolved and substituted expression satisfies `HasTypeA`. Proved by
@@ -1666,42 +1644,40 @@ private theorem resolveAux_HasTypeA_aux [DecidableEq T.IDMeta] [HasGen T.IDMeta]
     exact varCloseT_unresolved_HasTypeA_nil xv (LMonoTy.subst S xty)
       (applySubstT et_body S) h_ih_body h_annot
   case h_quant =>
-    intro m qk name bty triggers body et C Env Env' xv xty Env1 et_body Env2 et_tr Env3
-      h_res h_tbv h_res_body h_res_tr h_et h_env' h_body_ty_bool h_envwf h_ne h_fwf h_envwf1 h_ne1 h_aliases_eq
+    intro m qk name bty triggers body et C Env Env' xv xty Env1 et_body Env2 et_tr Env3 substInfo
+      h_res h_tbv h_res_body h_res_tr h_unify h_et h_env' h_abs32 h_envwf h_ne h_fwf h_envwf1 h_ne1 h_aliases_eq
       h_envwf2 h_ctx2 h_ih_body h_ih_tr h_resolved S h_absorbs
     subst h_et h_env'
     have h_ne2 : Env2.context.types ≠ [] := h_ctx2 ▸ h_ne1
     have h_resolved1 : TContext.AliasesResolved Env1.context := by
       intro a h_mem; rw [h_aliases_eq] at h_mem ⊢; exact h_resolved a h_mem
     have h_resolved2 : TContext.AliasesResolved Env2.context := h_ctx2 ▸ h_resolved1
-    have h_abs_Env3 : S.absorbs Env3.stateSubstInfo.subst := by
-      simp [TEnv.eraseFromContext, TEnv.updateContext] at h_absorbs
+    have h_abs_sub : S.absorbs substInfo.subst := by
+      simp [TEnv.eraseFromContext, TEnv.updateContext, TEnv.updateSubst] at h_absorbs
       exact h_absorbs
-    have h_abs_Env2 : S.absorbs Env2.stateSubstInfo.subst := by
-      have h_props_tr := resolveAux_properties
-        (LExpr.varOpen 0 (xv, some xty) triggers) et_tr C Env2 Env3 h_res_tr
-        h_ne2 h_envwf2.aliasesWF h_fwf h_envwf2.substFreshForGen
-        h_envwf2.ctxFreshForGen h_envwf2.boundVarsFresh
-      exact Subst.absorbs_trans _ _ _ h_props_tr.absorbs h_abs_Env3
+    have h_abs_Env3 : S.absorbs Env3.stateSubstInfo.subst :=
+      Subst.absorbs_trans _ _ _ (Constraints.unify_absorbs _ _ _ h_unify) h_abs_sub
+    have h_abs_Env2 : S.absorbs Env2.stateSubstInfo.subst :=
+      Subst.absorbs_trans _ _ _ h_abs32 h_abs_Env3
     have h_ih_b := h_ih_body h_resolved1 S h_abs_Env2
     have h_ih_t := h_ih_tr h_resolved2 S h_abs_Env3
     show HasTypeA []
-      (applySubstT (.quant ⟨m, LMonoTy.subst Env3.stateSubstInfo.subst xty⟩
-        qk name (some (LMonoTy.subst Env3.stateSubstInfo.subst xty))
+      (applySubstT (.quant ⟨m, LMonoTy.subst substInfo.subst xty⟩
+        qk name (some (LMonoTy.subst substInfo.subst xty))
         (LExpr.varCloseT 0 xv et_tr) (LExpr.varCloseT 0 xv et_body)) S).unresolved
-      ((applySubstT (.quant ⟨m, LMonoTy.subst Env3.stateSubstInfo.subst xty⟩
-        qk name (some (LMonoTy.subst Env3.stateSubstInfo.subst xty))
+      ((applySubstT (.quant ⟨m, LMonoTy.subst substInfo.subst xty⟩
+        qk name (some (LMonoTy.subst substInfo.subst xty))
         (LExpr.varCloseT 0 xv et_tr) (LExpr.varCloseT 0 xv et_body)) S).toLMonoTy)
     simp only [toLMonoTy]
     simp only [applySubstT, replaceMetadata, unresolved]
     change HasTypeA []
-      (.quant m qk name (some (LMonoTy.subst S (LMonoTy.subst Env3.stateSubstInfo.subst xty)))
+      (.quant m qk name (some (LMonoTy.subst S (LMonoTy.subst substInfo.subst xty)))
         (applySubstT (LExpr.varCloseT 0 xv et_tr) S).unresolved
         (applySubstT (LExpr.varCloseT 0 xv et_body) S).unresolved)
       LMonoTy.bool
     rw [applySubstT_varCloseT_comm (xv := xv) (et := et_tr),
         applySubstT_varCloseT_comm (xv := xv) (et := et_body)]
-    rw [LMonoTy.subst_absorbs S Env3.stateSubstInfo.subst xty h_abs_Env3]
+    rw [LMonoTy.subst_absorbs S substInfo.subst xty h_abs_sub]
     refine HasTypeA.quant (τ_tr := (LExpr.varCloseT 0 xv (applySubstT et_tr S)).toLMonoTy) ?_ ?_
     · have h_ctx_xv : Env1.context.types.find? xv = some (.forAll [] xty) :=
         typeBoundVar_adds_to_context C Env bty xv xty Env1 h_tbv
@@ -1719,8 +1695,16 @@ private theorem resolveAux_HasTypeA_aux [DecidableEq T.IDMeta] [HasGen T.IDMeta]
         applySubstT_allFvarAnnot xv xty et_tr S h_annot_tr_raw
       exact varCloseT_unresolved_HasTypeA_nil xv (LMonoTy.subst S xty)
         (applySubstT et_tr S) h_ih_t h_annot_tr
-    · have h_body_ty_eq : (LExpr.varCloseT 0 xv (applySubstT et_body S)).toLMonoTy = LMonoTy.bool := by
-        rw [varCloseT_toLMonoTy, applySubstT_toLMonoTy, h_body_ty_bool, LMonoTy.subst_bool]
+    · have h_body_ty_bool : LMonoTy.subst S et_body.toLMonoTy = LMonoTy.bool := by
+        have h_eq := unify_makes_equal et_body.toLMonoTy LMonoTy.bool
+          Env3.stateSubstInfo substInfo h_unify
+        have h := congrArg (LMonoTy.subst S) h_eq
+        rw [LMonoTy.subst_absorbs S substInfo.subst _ h_abs_sub,
+            LMonoTy.subst_absorbs S substInfo.subst _ h_abs_sub,
+            LMonoTy.subst_bool] at h
+        exact h
+      have h_body_ty_eq : (LExpr.varCloseT 0 xv (applySubstT et_body S)).toLMonoTy = LMonoTy.bool := by
+        rw [varCloseT_toLMonoTy, applySubstT_toLMonoTy, h_body_ty_bool]
       rw [← h_body_ty_eq]
       have h_ctx_xv : Env1.context.types.find? xv = some (.forAll [] xty) :=
         typeBoundVar_adds_to_context C Env bty xv xty Env1 h_tbv
@@ -1874,8 +1858,8 @@ theorem resolveAux_AbsWF [DecidableEq T.IDMeta] [HasGen T.IDMeta]
     rw [LMonoTy.subst_tcons_pair]
     simp only [LMonoTy.isArrow, Option.isSome_some]
   case h_quant =>
-    intro m qk name bty triggers body et C Env Env' xv xty Env1 et_body Env2 et_tr Env3
-      h_res h_tbv h_res_body h_res_tr h_et h_env' _ h_envwf h_ne h_fwf h_envwf1 h_ne1 h_aliases_eq
+    intro m qk name bty triggers body et C Env Env' xv xty Env1 et_body Env2 et_tr Env3 substInfo
+      h_res h_tbv h_res_body h_res_tr _ h_et h_env' _ h_envwf h_ne h_fwf h_envwf1 h_ne1 h_aliases_eq
       h_envwf2 h_ctx2 h_ih_body h_ih_tr
     subst h_et
     exact ⟨varCloseT_AbsWF 0 xv et_tr h_ih_tr, varCloseT_AbsWF 0 xv et_body h_ih_body⟩
@@ -2195,8 +2179,8 @@ private theorem resolveAux_eqModuloAnnotations {T : LExprParams}
     split <;> (simp only [EqModuloAnnotations];
                exact ⟨trivial, varCloseT_varOpen_eqModuloAnnotations 0 xv xty et_body body h_ih_body h_fresh⟩)
   case h_quant =>
-    intro m qk name bty triggers body et C Env Env' xv xty Env1 et_body Env2 et_tr Env3
-      h_res h_tbv h_res_body h_res_tr h_et h_env' _ h_envwf h_ne h_fwf h_envwf1 h_ne1 h_aliases_eq
+    intro m qk name bty triggers body et C Env Env' xv xty Env1 et_body Env2 et_tr Env3 substInfo
+      h_res h_tbv h_res_body h_res_tr _ h_et h_env' _ h_envwf h_ne h_fwf h_envwf1 h_ne1 h_aliases_eq
       h_envwf2 h_ctx2 h_ih_body h_ih_tr h_ws
     subst h_et
     have h_ws_body : WellScoped body Env.context :=

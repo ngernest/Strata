@@ -196,7 +196,7 @@ info: "; x\n(declare-const x Int)\n(assert (forall ((x@1 Int)) (= x@1 x)))\n"
     -- Term 2: ∀ y:Bool. y
     (.quant () .all "" (.some .bool) (LExpr.noTrigger ())
      (.bvar () 0))
-  ] SMT.Context.default [] with
+  ] SMT.Context.default {} with
   | .ok ([t1, t2], _, _) =>
     match Strata.SMTDDM.termToString t1, Strata.SMTDDM.termToString t2 with
     | .ok s1, .ok s2 =>
@@ -231,6 +231,30 @@ info: "; x\n(declare-const x Real)\n; y\n(declare-const y Real)\n(assert (|/| x 
       (.fvar () "x" (.some .real)))
     (.fvar () "y" (.some .real)))
   (factory := Core.Factory)
+
+-- A `realConst` whose value has no terminating decimal expansion (e.g. `1/3`,
+-- the value of the surface literal `frac{1, 3}`) cannot be emitted as a single
+-- SMT-LIB decimal literal, so it is encoded as the exact real division
+-- `(/ num den)` rather than erroring.
+/-- info: "(assert (|/| 1.0 3.0))\n" -/
+#guard_msgs in
+#eval toSMTCommandsWithAssert (.realConst () (1 / 3 : Rat))
+
+-- The sign of a negative non-terminating value (e.g. `-2/3`, the value of
+-- `-frac{2, 3}`) rides on the numerator, which the serializer wraps in unary
+-- minus; the denominator stays positive.
+/-- info: "(assert (|/| (- 2.0) 3.0))\n" -/
+#guard_msgs in
+#eval toSMTCommandsWithAssert (.realConst () (-2 / 3 : Rat))
+
+-- Conversely, a *terminating* value (e.g. `1/4`) keeps routing through the
+-- `Decimal.fromRat = some` branch and emits a single SMT-LIB decimal literal,
+-- not the `(/ num den)` division. Pins the branch boundary so a change to
+-- `fromRat`'s terminating-detection fails here instead of silently reshaping
+-- emitted SMT.
+/-- info: "(assert 0.25)\n" -/
+#guard_msgs in
+#eval toSMTCommandsWithAssert (.realConst () (1 / 4 : Rat))
 
 end ArrayTheory
 
@@ -442,12 +466,12 @@ info: "; s1\n(declare-const s1 String)\n; s2\n(declare-const s2 String)\n(assert
   (.app () (.app () strSuffixOfOp (.fvar () "s1" (.some .string)))
     (.fvar () "s2" (.some .string)))
 
-/-! ## `ProofObligation.toSMTTerms` preserves the input `typeFactory`
+/-! ## `ProofObligation.toSMTTerms` preserves the input datatype factory
 
-`SMT.Context.typeFactory` is seeded by the caller from the env's datatype
+`SMT.Context.datatypes` is seeded by the caller from the env's datatype
 TypeFactory and is never modified during encoding (encoding a datatype marks it
-`seen` and registers its function maps, but never extends `typeFactory`). These
-checks pin that invariant: the output context's `typeFactory` equals the
+`seen` and registers its function maps, but never extends `datatypes`). These
+checks pin that invariant: the output context's datatype factory equals the
 datatype factory the caller seeded it with. -/
 
 private def intListDatatypeRT : Lambda.LDatatype Unit :=
@@ -465,14 +489,14 @@ private def assertOb (obligation : LExpr CoreLParams.mono) :
     obligation := obligation, metadata := {} }
 
 /-- Build an env from the given datatype blocks, encode `ob` with its
-    `typeFactory` seeded from the env's datatypes, and return whether the output
-    context's `typeFactory` still equals that input datatype factory. -/
+    `datatypes` seeded from the env's datatypes, and return whether the output
+    context's datatype factory still equals that input datatype factory. -/
 private def typeFactoryPreserved (blocks : List (List (Lambda.LDatatype Unit)))
     (ob : Imperative.ProofObligation Expression) : Except Std.Format Bool := do
   let env ← (Env.init.addDatatypes blocks).mapError (f!"{·}")
-  let ctx := { SMT.Context.default with typeFactory := env.datatypes }
+  let ctx := { SMT.Context.default with datatypes := .ofFactory env.datatypes }
   let (_, _, _, _, ctx', _) ← ProofObligation.toSMTTerms env.factory ob ctx
-  .ok (ctx'.typeFactory == env.datatypes)
+  .ok (ctx'.datatypes.factory == env.datatypes)
 
 -- Obligation referencing the `IntList` datatype (via its `Nil` constructor).
 /-- info: ok: true -/
@@ -559,6 +583,34 @@ Result: ✅ pass
 -/
 #guard_msgs in
 #eval! Core.verify quotedStringProgram (options := Core.VerifyOptions.quiet)
+
+-- A `frac{n, d}` literal whose value has no terminating decimal expansion is
+-- encoded to SMT as exact real division, so it verifies precisely rather than
+-- hitting the old `Non-decimal real value` encoding error. `1/3 + 1/3 + 1/3`
+-- is exactly `1.0` (holds), while `-2/3 == 2/3` is false (fails).
+def nonDecimalFracProgram :=
+#strata
+program Core;
+
+procedure P()
+{
+  assert [three_thirds]: frac{1, 3} + frac{1, 3} + frac{1, 3} == 1.0;
+  assert [neg_neq_pos]: -frac{2, 3} == frac{2, 3};
+};
+#end
+
+/--
+info:
+Obligation: three_thirds
+Property: assert
+Result: ✅ pass
+
+Obligation: neg_neq_pos
+Property: assert
+Result: ❌ fail
+-/
+#guard_msgs in
+#eval Core.verify nonDecimalFracProgram (options := Core.VerifyOptions.quiet)
 
 end Strata
 

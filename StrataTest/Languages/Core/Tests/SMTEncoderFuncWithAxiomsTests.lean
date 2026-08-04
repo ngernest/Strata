@@ -90,11 +90,11 @@ def encodeFuncsToSMT (es : List (LExpr CoreLParams.mono))
   let env ← (funcs.foldlM (fun (env : Env) f => env.addFactoryFunc f) Env.init).mapError
     (fun msg => f!"Error adding functions: {msg}")
   let factory := env.factory
-  -- Seed the encoding context's `typeFactory` from the env's datatypes.
-  let ctx := { SMT.Context.default with typeFactory := env.datatypes }
+  -- Seed the encoding context's `datatypes` from the env's datatypes.
+  let ctx := { SMT.Context.default with datatypes := .ofFactory env.datatypes }
 
   -- 2. Encode the terms, then resolve/commit the deferred function definitions.
-  let (terms, ctx, pending) ← toSMTTerms factory es ctx []
+  let (terms, ctx, pending) ← toSMTTerms factory es ctx {}
   let ctx ← processPendingFnDefs factory ctx pending
 
   -- 3/ Render terms and context through SMTDDM, lifting render errors into `Format`.
@@ -382,11 +382,11 @@ private def testAllCommitted : Except Format String := do
   let env ← (funcs.foldlM (fun (env : Env) f => env.addFactoryFunc f) Env.init).mapError
     (fun msg => f!"Error adding functions: {msg}")
   let factory := env.factory
-  let ctx := { SMT.Context.default with typeFactory := env.datatypes }
+  let ctx := { SMT.Context.default with datatypes := .ofFactory env.datatypes }
   let (_, ctx, pending) ← toSMTTerms factory
-    [(.eq () (appI "f" (.intConst () 0)) (.intConst () 0))] ctx []
+    [(.eq () (appI "f" (.intConst () 0)) (.intConst () 0))] ctx {}
   let ctx' ← processPendingFnDefs factory ctx pending
-  let allCommitted := pending.all (fun p => SMT.Context.committedFn ctx' p.uf)
+  let allCommitted := pending.toList.all (fun p => SMT.Context.committedFn ctx' p.uf)
   return s!"{allCommitted}"
 
 /-- info: true -/
@@ -395,6 +395,31 @@ private def testAllCommitted : Except Format String := do
   match testAllCommitted with
   | .ok s => IO.println s
   | .error e => IO.println s!"ERROR: {e.pretty}"
+
+/-! ## Test 10: scheduling deduplicates repeated references to the same function -/
+
+-- Referencing the same function several times within the obligation terms must
+-- schedule it into the pending queue exactly once. This directly exercises the
+-- dedup branch of `OrderedKeyedSet.insert` (`setIdx.contains`, keyed on `UF`)
+-- reached via `pending.insert` in `toSMTOp`: a regression there would grow the
+-- queue.
+private def testScheduleDedup : Except Format String := do
+  let funcs := [monoFuncWithAxiomId "f", monoFuncWithAxiomId "g", monoFuncWithAxiomId "h"]
+  let env ← (funcs.foldlM (fun (env : Env) f => env.addFactoryFunc f) Env.init).mapError
+    (fun msg => f!"Error adding functions: {msg}")
+  let factory := env.factory
+  let ctx := { SMT.Context.default with datatypes := .ofFactory env.datatypes }
+  -- Each of f, g, h is referenced twice; the six references share three `UF`s.
+  let (_, _, pending) ← toSMTTerms factory
+    [(.eq () (appI "f" (.intConst () 0)) (appI "f" (.intConst () 1))),
+     (.eq () (appI "g" (.intConst () 0)) (appI "g" (.intConst () 1))),
+     (.eq () (appI "h" (.intConst () 0)) (appI "h" (.intConst () 1)))] ctx {}
+  -- f, g, h scheduled exactly once each despite the duplicate references.
+  return s!"{pending.size}"
+
+/-- info: ok: 3 -/
+#guard_msgs in
+#eval testScheduleDedup
 
 end FuncWithAxiomsTests
 

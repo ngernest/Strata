@@ -335,6 +335,7 @@ theorem TContext_types_subst_find_none [DecidableEq IDMeta]
       rw [TContext_types_subst_go_find_none scope S x h_scope]
       exact ih h
 
+/-- A name absent from a context's type scope stays absent after substitution. -/
 theorem TContext.subst_find_none [DecidableEq IDMeta]
     (ctx : TContext IDMeta) (S : Subst) (x : Identifier IDMeta)
     (h : ctx.types.find? x = none) :
@@ -342,6 +343,7 @@ theorem TContext.subst_find_none [DecidableEq IDMeta]
   simp only [TContext.subst]
   exact TContext_types_subst_find_none ctx.types S x h
 
+/-- Looking up a name in a substituted context returns the substituted type. -/
 theorem TContext.subst_find_some [DecidableEq IDMeta]
     (ctx : TContext IDMeta) (S : Subst) (x : Identifier IDMeta) (ty : LTy)
     (h : ctx.types.find? x = some ty) :
@@ -580,6 +582,17 @@ def LContext.addFactoryFunction (C : LContext T) (fn : LFunc T) : LContext T :=
   else
     { C with functions := C.functions.push fn h }
 
+/-- Like `addFactoryFunction`, but errors on a name clash with an existing
+    function in `C.functions` instead of silently discarding `fn`. Delegates to
+    `Factory.tryPush` (which produces the "A function of name … already exists!"
+    diagnostic). Use this when `fn` is a user declaration that must not be
+    shadowed by (or shadow) an existing function such as a built-in factory
+    function — `addFactoryFunction`'s silent no-op would otherwise drop it. -/
+@[expose]
+def LContext.addFactoryFunctionWithError [Inhabited T.Metadata] [ToFormat T.IDMeta]
+    (C : LContext T) (fn : LFunc T) : Except DiagnosticModel (LContext T) := do
+  .ok { C with functions := (← C.functions.tryPush fn) }
+
 /--
 Add a mutual block of datatypes `block` to an `LContext` `C`.
 This adds all types to `C.datatypes` and `C.knownTypes`,
@@ -658,6 +671,7 @@ def TEnv.addInNewestContext (Env : TEnv T.IDMeta) (map : Map T.Identifier LTy) :
   Env.updateContext ctx'
 
 omit [DecidableEq T.IDMeta] [ToFormat T.Metadata] [ToFormat T.IDMeta] in
+/-- `addInNewestContext` touches only the type scope, leaving `stateSubstInfo` unchanged. -/
 theorem TEnv.addInNewestContext_stateSubstInfo (Env : TEnv T.IDMeta) (map : Map T.Identifier LTy) :
     (Env.addInNewestContext map).stateSubstInfo = Env.stateSubstInfo := by
   simp [TEnv.addInNewestContext, TEnv.updateContext]
@@ -705,6 +719,7 @@ def TEnv.freeVarChecks [DecidableEq T.IDMeta] (Env : TEnv T.IDMeta) (es : List (
     freeVarChecks Env erest
 
 omit [DecidableEq T.IDMeta] [ToFormat T.Metadata] [ToFormat T.IDMeta] in
+/-- A successful `freeVarCheck` guarantees every free variable of `e` is a known variable. -/
 theorem TEnv.freeVarCheck_implies_fvars_in_knownVars [DecidableEq T.IDMeta]
     (Env : TEnv T.IDMeta) (e : LExpr T.mono) (msg : Format)
     (h : Env.freeVarCheck e msg = .ok ()) :
@@ -1345,12 +1360,10 @@ def TEnv.addTypeAlias (alias : TypeAlias) (C: LContext T) (Env : TEnv T.IDMeta) 
               Name: {alias.name}\n\
               Type Arguments: {alias.typeArgs}\n\
               Type Definition: {alias.type}"
-  -- Reject *phantom* type arguments: every declared type argument must actually occur
-  -- free in the alias body. Without this, a phantom alias like `Phantom α := int` is WF
-  -- yet `AliasEquiv (Phantom a) int` drops `a`, so alias resolution can lose a free type
-  -- variable — breaking `HasType_context_aliasEquiv` (whose `tgen` case needs funcContext
-  -- formal types to introduce no free var absent from their resolved form). Requiring
-  -- `typeArgs ⊆ freeVars(type)` makes aliases non-dropping, so `AliasEquiv` preserves free vars.
+  -- Reject *phantom* type arguments (those not free in the alias body): a phantom alias
+  -- like `Phantom α := int` would let `AliasEquiv (Phantom a) int` drop `a`, so alias
+  -- resolution could lose a free type variable. `typeArgs ⊆ freeVars(type)` keeps aliases
+  -- non-dropping, so `AliasEquiv` preserves free vars.
   else if !(alias.typeArgs ⊆ alias.type.freeVars) then
     .error f!"[TEnv.addTypeAlias] Type definition has unused (phantom) type arguments!\n\
               Name: {alias.name}\n\
@@ -1622,11 +1635,9 @@ theorem TGenEnv.genTyVars_allFresh {T : LExprParams} [DecidableEq T.IDMeta]
   exact TContext.isFresh_of_not_mem_knownTypeVars
     (TGenEnv.genTyVars_not_mem_knownTypeVars n Env tvs Env' h tv h_mem)
 
-/-- Every variable produced by `genTyVars` has the *positive* generated-name form
-    `tyPrefix ++ toString k`. (The companion `genTyVars_allFresh`/`_genFresh'` give
-    only the negative "not a future gen-name" property; this exposes the literal
-    prefix, which is what disjointness-from-user-names arguments need: user names
-    never carry the `$__ty` prefix — see `LFuncWF.typeArgs_no_gen_prefix`.) -/
+/-- Every variable produced by `genTyVars` has the generated-name form
+    `tyPrefix ++ toString k`, exposing the literal prefix (unlike the negative
+    `genTyVars_allFresh`) for disjointness-from-user-names arguments. -/
 theorem TGenEnv.genTyVars_prefixed {IDMeta : Type} [ToFormat IDMeta]
     (n : Nat) (Env : TGenEnv IDMeta) (tvs : List TyIdentifier) (Env' : TGenEnv IDMeta)
     (h : TGenEnv.genTyVars n Env = .ok (tvs, Env')) :

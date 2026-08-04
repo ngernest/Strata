@@ -37,6 +37,15 @@ private def SourceRange.toFileRange (uri : Uri) (sr : SourceRange) : FileRange :
   ⟨ uri, sr ⟩
 
 private def getArgFileRange (arg : Arg) : TransM (Option FileRange) := do
+  -- `SourceRange.none` ({0,0}) is StrataDDM's own "no location" sentinel (see
+  -- `StrataDDM.SourceRange.none`/`isNone`; its `format` prints "unknown", and
+  -- the Ion reader materializes a null range annotation as this value — no
+  -- producer literally writes zeroes on the wire). Surface it as `none` rather
+  -- than as a real-looking 0-0 location that downstream diagnostics would
+  -- point at (a real token at offset 0 has stop > 0). If source ranges become
+  -- mandatory, this check should give way to enclosing-range synthesis — see
+  -- `translateSingleReturnType` for the first instance of that pattern.
+  if arg.ann.isNone then return none
   return match (← get).uri with
   | some uri => some (SourceRange.toFileRange uri arg.ann)
   | none => none
@@ -90,29 +99,58 @@ def translateNat (arg : Arg) : TransM Nat := do
     | TransM.error s!"translateNat expects num literal"
   return n
 
-partial def translateHighType (arg : Arg) : TransM HighTypeMd := do
+def translateHighType (arg : Arg) : TransM HighTypeMd := do
   let src ← getArgFileRange arg
-  match arg with
+  match _harg : arg with
   | .op op =>
-    match op.name, op.args with
-    | q`Laurel.intType, _ => return mkHighTypeMd .TInt src
-    | q`Laurel.boolType, _ => return mkHighTypeMd .TBool src
-    | q`Laurel.float64Type, _ => return mkHighTypeMd .TFloat64 src
-    | q`Laurel.realType, _ => return mkHighTypeMd .TReal src
-    | q`Laurel.stringType, _ => return mkHighTypeMd .TString src
-    | q`Laurel.bvType, #[widthArg] =>
-      let width ← translateNat widthArg
-      return mkHighTypeMd (.TBv width) src
-    | q`Laurel.coreType, #[.ident _ name] => return mkHighTypeMd (.UserDefined name) src
-    | q`Laurel.mapType, #[keyArg, valArg] =>
-      let keyType ← translateHighType keyArg
-      let valType ← translateHighType valArg
-      return mkHighTypeMd (.TMap keyType valType) src
-    | q`Laurel.compositeType, #[nameArg] =>
-      let name ← translateIdent nameArg
-      return mkHighTypeMd (.UserDefined name) src
-    | _, _ => TransM.error s!"translateHighType: unsupported type operator {repr op.name}"
+    -- Dispatch on the operator name via `if` chains and match `op.args.toList`;
+    -- this structure lets Lean generate the match equations needed for
+    -- well-founded recursion.
+    if op.name == q`Laurel.intType then return mkHighTypeMd .TInt src
+    else if op.name == q`Laurel.boolType then return mkHighTypeMd .TBool src
+    else if op.name == q`Laurel.float64Type then return mkHighTypeMd .TFloat64 src
+    else if op.name == q`Laurel.realType then return mkHighTypeMd .TReal src
+    else if op.name == q`Laurel.stringType then return mkHighTypeMd .TString src
+    else if op.name == q`Laurel.bvType then
+      match op.args.toList with
+      | [widthArg] =>
+        let width ← translateNat widthArg
+        return mkHighTypeMd (.TBv width) src
+      | _ => TransM.error s!"translateHighType: unsupported type operator {repr op.name}"
+    else if op.name == q`Laurel.coreType then
+      match op.args.toList with
+      | [.ident _ name] => return mkHighTypeMd (.UserDefined name) src
+      | _ => TransM.error s!"translateHighType: unsupported type operator {repr op.name}"
+    else if op.name == q`Laurel.mapType then
+      match _hargs : op.args.toList with
+      | [keyArg, valArg] =>
+        let keyType ← translateHighType keyArg
+        let valType ← translateHighType valArg
+        return mkHighTypeMd (.TMap keyType valType) src
+      | _ => TransM.error s!"translateHighType: unsupported type operator {repr op.name}"
+    else if op.name == q`Laurel.compositeType then
+      match op.args.toList with
+      | [nameArg] =>
+        let name ← translateIdent nameArg
+        return mkHighTypeMd (.UserDefined name) src
+      | _ => TransM.error s!"translateHighType: unsupported type operator {repr op.name}"
+    else TransM.error s!"translateHighType: unsupported type operator {repr op.name}"
   | _ => TransM.error s!"translateHighType expects operation"
+  termination_by sizeOf arg
+  decreasing_by
+    all_goals (
+      have hmk : keyArg ∈ op.args := by
+        have h1 : keyArg ∈ op.args.toList := by simp [_hargs]
+        simpa using h1
+      have hmv : valArg ∈ op.args := by
+        have h1 : valArg ∈ op.args.toList := by simp [_hargs]
+        simpa using h1
+      have h2k := Array.sizeOf_lt_of_mem hmk
+      have h2v := Array.sizeOf_lt_of_mem hmv
+      subst _harg
+      cases op
+      simp at h2k h2v ⊢
+      omega)
 
 def translateString (arg : Arg) : TransM String := do
   let .strlit _ s := arg
@@ -281,6 +319,24 @@ partial def translateStmtExpr (arg : Arg) : TransM StmtExprMd := do
     | q`Laurel.postDecr, #[arg0] =>
       let target ← translateIncrDecrTarget arg0 "postDecr"
       return mkStmtExprMd (.IncrDecr .Post .Decr target) src
+    | q`Laurel.addAssign, #[arg0, arg1] =>
+      let target ← translateIncrDecrTarget arg0 "+="
+      return mkStmtExprMd (.CompoundAssign .Add target (← translateStmtExpr arg1)) src
+    | q`Laurel.subAssign, #[arg0, arg1] =>
+      let target ← translateIncrDecrTarget arg0 "-="
+      return mkStmtExprMd (.CompoundAssign .Sub target (← translateStmtExpr arg1)) src
+    | q`Laurel.mulAssign, #[arg0, arg1] =>
+      let target ← translateIncrDecrTarget arg0 "*="
+      return mkStmtExprMd (.CompoundAssign .Mul target (← translateStmtExpr arg1)) src
+    | q`Laurel.divAssign, #[arg0, arg1] =>
+      let target ← translateIncrDecrTarget arg0 "/="
+      return mkStmtExprMd (.CompoundAssign .Div target (← translateStmtExpr arg1)) src
+    | q`Laurel.modAssign, #[arg0, arg1] =>
+      let target ← translateIncrDecrTarget arg0 "%="
+      return mkStmtExprMd (.CompoundAssign .Mod target (← translateStmtExpr arg1)) src
+    | q`Laurel.strConcatAssign, #[arg0, arg1] =>
+      let target ← translateIncrDecrTarget arg0 "^="
+      return mkStmtExprMd (.CompoundAssign .StrConcat target (← translateStmtExpr arg1)) src
     | q`Laurel.multiAssign, #[targetsSeq, valueArg] =>
       let targets ← match targetsSeq with
         | .seq _ .comma args => args.toList.mapM fun targ => do
@@ -519,6 +575,33 @@ def translateEnsuresClauses (arg : Arg) : TransM (List Condition) := do
     pure allEnsures
   | _ => pure []
 
+/-- Translate the single-output `Laurel.returnType` op into the implicit
+    `$result` output parameter.
+
+    A producer may attach a source range only to the outer `returnType` op:
+    the Java front-end builds the inner type op from a javac `Type`, which
+    carries no tree position, so the inner op's range is the `SourceRange.none`
+    sentinel. Fall back to the outer op's range in that case, so the `ensures`
+    that `ConstrainedTypeElim` synthesizes for a constrained output type (e.g.
+    `int32` for a Java `int`) inherits a real location — otherwise an implicit
+    no-overflow failure is reported at the whole-file fallback position instead
+    of at the return type.
+
+    The jverify producer now stamps the declared type tree's range on the inner
+    op itself (this CR's StrataJavaFrontEnd commit), so for current jverify the
+    inner range wins and this fallback is a safety net — it remains load-bearing
+    for other producers and previously-emitted Ion. -/
+def translateSingleReturnType (returnTypeOp : StrataDDM.Operation) :
+    TransM (List Parameter) := do
+  match returnTypeOp.name, returnTypeOp.args with
+  | q`Laurel.returnType, #[typeArg] =>
+    let retType ← translateHighType typeArg
+    let retType ← match retType.source with
+      | some _ => pure retType
+      | none => do pure { retType with source := ← getArgFileRange (.op returnTypeOp) }
+    pure [{ name := resultOutputName, type := retType : Parameter }]
+  | _, _ => TransM.error s!"Expected optionalReturnType operation, got {repr returnTypeOp.name}"
+
 def parseProcedure (arg : Arg) : TransM Procedure := do
   let .op op := arg
     | TransM.error s!"parseProcedure expects operation"
@@ -543,11 +626,7 @@ def parseProcedure (arg : Arg) : TransM Procedure := do
     -- Either returnTypeArg or returnParamsArg may have a value, not both
     -- If returnTypeArg is set, create a single "result" parameter
     let returnParameters ← match returnTypeArg with
-      | .option _ (some (.op returnTypeOp)) => match returnTypeOp.name, returnTypeOp.args with
-        | q`Laurel.returnType, #[typeArg] =>
-          let retType ← translateHighType typeArg
-          pure [{ name := resultOutputName, type := retType : Parameter }]
-        | _, _ => TransM.error s!"Expected optionalReturnType operation, got {repr returnTypeOp.name}"
+      | .option _ (some (.op returnTypeOp)) => translateSingleReturnType returnTypeOp
       | .option _ none =>
         -- No return type, check returnParamsArg instead
         match returnParamsArg with

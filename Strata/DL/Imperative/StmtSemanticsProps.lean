@@ -220,7 +220,7 @@ private theorem step_preserves_factoryExtendsOf
   -- and no stacked block frames are added or removed.
   | step_cmd _ | step_exit | step_typeDecl
   | step_stmts_nil | step_stmts_cons | step_seq_done | step_seq_exit
-  | step_loop_exit _ _ _ _ | step_loop_nondet_exit _ _ =>
+  | step_loop_exit _ _ | step_loop_nondet_exit =>
     simp only [Config.factoryExtendsOf] at hinv ⊢; exact hinv
   -- Rules that wrap the body in a fresh block (or seq-of-block).  The active
   -- eval is unchanged, and the new block's f_parent is also the pre-config's
@@ -228,7 +228,7 @@ private theorem step_preserves_factoryExtendsOf
   | step_block
   | step_ite_true _ _ | step_ite_false _ _
   | step_ite_nondet_true | step_ite_nondet_false
-  | step_loop_enter _ _ _ _ | step_loop_nondet_enter _ _ =>
+  | step_loop_enter _ _ | step_loop_nondet_enter =>
     simp only [Config.factoryExtendsOf] at hinv ⊢; exact ⟨hinv, hinv⟩
   -- Block-exit rules: drop the inner active eval and restore f_parent.
   | step_block_done | step_block_exit_match _ | step_block_exit_mismatch _ =>
@@ -386,8 +386,8 @@ theorem stmts_append_terminates
 local macro "apply_step" : tactic => `(tactic| first
   | exact .step_cmd ‹_›        | exact .step_ite_true ‹_› ‹_›
   | exact .step_ite_false ‹_› ‹_›
-  | exact .step_loop_enter ‹_› ‹_› ‹_› ‹_›
-  | exact .step_loop_exit ‹_› ‹_› ‹_› ‹_›
+  | exact .step_loop_enter ‹_› ‹_›
+  | exact .step_loop_exit ‹_› ‹_›
   | exact .step_block
   | exact .step_exit            | exact .step_funcDecl
   | exact .step_typeDecl        | exact .step_stmts_nil
@@ -416,7 +416,7 @@ private def step_simulation
   -- Non-recursive cases where c₁ is `.stmt` or `.stmts`: exactly one c₂
   -- constructor is valid, and the output ConfigSE follows by `simp_all`.
   | step_cmd _ | step_block | step_ite_true _ _ | step_ite_false _ _
-  | step_loop_enter _ _ _ _ | step_loop_exit _ _ _ _
+  | step_loop_enter _ _ | step_loop_exit _ _
   | step_exit | step_funcDecl | step_typeDecl | step_stmts_nil | step_stmts_cons =>
     cases c₂ <;> try contradiction
     obtain ⟨rfl, hs, hfac⟩ := heq; rename_i ρ₂; cases ρ₂; subst hs; subst hfac
@@ -429,14 +429,14 @@ private def step_simulation
     cases c₂ <;> try contradiction
     obtain ⟨rfl, hs, hfac⟩ := heq; rename_i ρ₂; cases ρ₂; simp at hs hfac; subst hs; subst hfac
     exact ⟨_, .step_ite_nondet_false, by simp [ConfigSE]⟩
-  | step_loop_nondet_enter _ _ =>
+  | step_loop_nondet_enter =>
     cases c₂ <;> try contradiction
     obtain ⟨rfl, hs, hfac⟩ := heq; rename_i ρ₂; cases ρ₂; simp at hs hfac; subst hs; subst hfac
-    exact ⟨_, .step_loop_nondet_enter ‹_› ‹_›, by simp_all [ConfigSE]⟩
-  | step_loop_nondet_exit _ _ =>
+    exact ⟨_, .step_loop_nondet_enter, by simp_all [ConfigSE]⟩
+  | step_loop_nondet_exit =>
     cases c₂ <;> try contradiction
     obtain ⟨rfl, hs, hfac⟩ := heq; rename_i ρ₂; cases ρ₂; simp at hs hfac; subst hs; subst hfac
-    exact ⟨_, .step_loop_nondet_exit ‹_› ‹_›, by simp_all [ConfigSE]⟩
+    exact ⟨_, .step_loop_nondet_exit, by simp_all [ConfigSE]⟩
   | step_seq_inner h =>
     cases c₂ with
     | seq i₂ _ =>
@@ -645,7 +645,7 @@ omit [HasOps P] [HasInt P] [HasIntOps P] [HasFvars P] in
     (`Block.exitsCoveredByBlocks [] bss`), then `.stmts bss ρ` never reaches `.exiting`. -/
 theorem block_exitsCoveredByBlocks_noEscape
     (bss : List (Stmt P CmdT))
-    (hwp : Stmt.exitsCoveredByBlocks.Block.exitsCoveredByBlocks [] bss) :
+    (hwp : Block.exitsCoveredByBlocks [] bss) :
     ∀ (ρ : Env P) (lbl : String) (ρ' : Env P),
       ¬ StepStmtStar P EvalCmd extendFactory (.stmts bss ρ) (.exiting lbl ρ') := by
   intro ρ lbl ρ' hstar
@@ -1037,9 +1037,7 @@ private theorem noMatchingAssert_not_isAtAssert
   | .stmt (.exit ..) _ | .stmt (.funcDecl ..) _ | .stmt (.typeDecl ..) _ =>
     simp [isAtAssert]
   | .stmt (.loop _ _ inv _ _) _ =>
-    simp [Config.noMatchingAssert, Stmt.noMatchingAssert] at hno
-    intro hat
-    exact hno.1 label expr hat rfl
+    simp [isAtAssert]
   | .stmts [] _ => simp [isAtAssert]
   | .stmts ((.cmd (.assert l _ _)) :: _) _ =>
     simp [Config.noMatchingAssert, Stmt.noMatchingAssert.Stmts.noMatchingAssert, Stmt.noMatchingAssert] at hno
@@ -1052,10 +1050,7 @@ private theorem noMatchingAssert_not_isAtAssert
   | .stmts ((.funcDecl ..) :: _) _ | .stmts ((.typeDecl ..) :: _) _ =>
     simp [isAtAssert]
   | .stmts ((.loop _ _ inv _ _) :: _) _ =>
-    simp [Config.noMatchingAssert, Stmt.noMatchingAssert.Stmts.noMatchingAssert,
-      Stmt.noMatchingAssert] at hno
-    intro hat
-    exact hno.1.1 label expr hat rfl
+    simp [isAtAssert]
   | .terminal _ | .exiting _ _ => simp [isAtAssert]
   | .block _ _ _ inner => exact noMatchingAssert_not_isAtAssert inner label expr hno
   | .seq inner _ => exact noMatchingAssert_not_isAtAssert inner label expr hno.1
@@ -1244,38 +1239,6 @@ evaluator `EvalCmd`, and an `IsAtAssert` predicate.  Language extensions
 to the loop / seq / block structure of configurations. -/
 
 omit [HasFvar P] [HasOps P] [HasFvars P] [HasInt P] [HasIntOps P] in
-/-- Helper: when all asserts at a loop config pass (via `hv`), the
-    loop-step's `hasInvFailure` boolean is forced to `false`. -/
-theorem loop_step_hasInvFailure_false
-    {CmdT : Type} {EvalCmd : EvalCmdParam P CmdT}
-    (IsAtAssert : Config P CmdT → AssertId P → Prop)
-    (h_IsAtAssert_loop_inv : ∀ {g m inv body md ρ lbl e},
-      (lbl, e) ∈ inv →
-      IsAtAssert (.stmt (.loop g m inv body md) ρ) ⟨lbl, e⟩)
-    {c : Config P CmdT} {ρ : Env P}
-    {inv : List (String × P.Expr)} {guard : ExprOrNondet P}
-    {m : Option P.Expr} {body : List (Stmt P CmdT)} {md : MetaData P}
-    {hasInvFailure : Bool}
-    (hc_shape : c = .stmt (.loop guard m inv body md) ρ)
-    (hv : ∀ a cfg, StepStmtStar P EvalCmd extendFactory c cfg →
-      IsAtAssert cfg a → P.eval cfg.getEnv.factory cfg.getStore a.expr = some HasBool.tt)
-    (hff_iff : hasInvFailure = true ↔ ∃ le, le ∈ inv ∧
-      P.eval ρ.factory ρ.store le.snd = some HasBool.ff) :
-    hasInvFailure = false := by
-  cases hb : hasInvFailure with
-  | false => rfl
-  | true =>
-    exfalso
-    rw [hb] at hff_iff
-    have ⟨⟨lbl, e⟩, hmem, he_ff⟩ := hff_iff.mp rfl
-    have hat : IsAtAssert c ⟨lbl, e⟩ := hc_shape ▸ h_IsAtAssert_loop_inv hmem
-    have htt := hv ⟨lbl, e⟩ c (.refl _) hat
-    rw [hc_shape] at htt
-    simp only [Config.getStore, Config.getEnv] at htt
-    rw [he_ff] at htt
-    exact absurd (Option.some.inj htt) HasBool.tt_is_not_ff.symm
-
-omit [HasFvar P] [HasOps P] [HasFvars P] [HasInt P] [HasIntOps P] in
 /-- Single-step: if hasFailure is false and all reachable asserts pass,
     then hasFailure stays false after one step.
 
@@ -1290,9 +1253,6 @@ theorem step_preserves_noFailure
         EvalCmd ρ.factory ρ.store c σ' true →
         ∃ a : AssertId P, IsAtAssert (.stmt (.cmd c) ρ) a ∧
           P.eval ρ.factory ρ.store a.expr = some HasBool.ff)
-    (h_IsAtAssert_loop : ∀ {g m inv body md ρ lbl e},
-      (lbl, e) ∈ inv →
-      IsAtAssert (.stmt (.loop g m inv body md) ρ) ⟨lbl, e⟩)
     (h_IsAtAssert_seq : ∀ {inner ss a},
       IsAtAssert inner a → IsAtAssert (.seq inner ss) a)
     (h_IsAtAssert_block : ∀ {label σ_parent f_parent inner a},
@@ -1317,14 +1277,9 @@ theorem step_preserves_noFailure
       rw [hff] at htt
       exact absurd (Option.some.inj htt) HasBool.tt_is_not_ff.symm
   | step_block | step_funcDecl => simp [Config.getEnv]; exact hnf
-  | step_loop_enter _ _ hff_iff _
-  | step_loop_exit _ _ hff_iff _
-  | step_loop_nondet_enter _ hff_iff | step_loop_nondet_exit _ hff_iff =>
-    simp only [Config.getEnv]
-    have hinv := loop_step_hasInvFailure_false (P := P) (extendFactory := extendFactory)
-      IsAtAssert h_IsAtAssert_loop rfl hv hff_iff
-    simp [Config.getEnv] at hnf
-    rw [hnf, Bool.false_or]; exact hinv
+  | step_loop_enter _ _ | step_loop_exit _ _
+  | step_loop_nondet_enter | step_loop_nondet_exit =>
+    simp only [Config.getEnv] at hnf ⊢; exact hnf
   | step_seq_inner h ih =>
     exact ih
       (fun a cfg hr hat =>
@@ -1363,7 +1318,6 @@ theorem allAssertsValid_preserves_noFailure
         (fun hcmd => by
           cases hcmd with
           | eval_assert_fail hff _ => exact ⟨⟨_, _⟩, ⟨rfl, rfl⟩, hff⟩)
-        (fun hmem => hmem)
         (fun h => h)
         (fun h => h)
         _ _ hv hnf hstep)
@@ -1766,7 +1720,7 @@ omit [HasOps P] [HasFvars P] [HasInt P] [HasIntOps P] in
 theorem stmtsT_append_terminal
     (ss₁ : List (Stmt P CmdT)) (s : Stmt P CmdT) (ρ₀ ρ' : Env P)
     (hstar : ReflTransT (StepStmt P EvalCmd extendFactory) (.stmts (ss₁ ++ [s]) ρ₀) (.terminal ρ'))
-    (hcov : Stmt.exitsCoveredByBlocks.Block.exitsCoveredByBlocks (P := P) (CmdT := CmdT) [] ss₁) :
+    (hcov : Block.exitsCoveredByBlocks (P := P) (CmdT := CmdT) [] ss₁) :
     ∃ (ρ₁ : Env P), ∃ (_ : StepStmtStar P EvalCmd extendFactory (.stmts ss₁ ρ₀) (.terminal ρ₁)),
       ∃ (hs : ReflTransT (StepStmt P EvalCmd extendFactory) (.stmt s ρ₁) (.terminal ρ')),
       hs.len < hstar.len := by
@@ -2107,6 +2061,283 @@ theorem stmt_noFuncDecl_preserves_factory
       simp_all [Config.noFuncDecl, Stmt.noFuncDecl, Block.noFuncDecl, Config.getEnv]
 
 end NoFuncDeclFactory
+
+/-! ### Generic small-step inversion lemmas
+
+These structural inversions of `StepStmt` runs (terminal/exiting-stuck fixpoints,
+failing-config decompositions through `.seq` / `.block` / `.stmts` frames, labelled
+block terminal inversion, and the two `StoreAgreement` projection helpers) are
+consumed verbatim by the loop-init-hoist and structured-to-unstructured correctness
+proofs.  They live here so the several downstream transform proofs share one copy. -/
+
+/-- A `ReflTransT` run from a stuck `.terminal ρ` config stays there. -/
+theorem reflTransT_from_terminal (P : PureExpr) [HasFvar P] [HasFvars P] [HasBoolOps P]
+    [HasVarsPure P P.Expr] (extendFactory : ExtendFactory P) {ρ : Env P} {c : Config P (Cmd P)}
+    (h : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.terminal ρ) c) : c = .terminal ρ := by
+  match h with
+  | .refl _ => rfl
+  | .step _ _ _ hstep _ => exact nomatch hstep
+
+/-- A `ReflTransT` run from a stuck `.exiting l ρ` config stays there. -/
+theorem reflTransT_from_exiting (P : PureExpr) [HasFvar P] [HasFvars P] [HasBoolOps P]
+    [HasVarsPure P P.Expr] (extendFactory : ExtendFactory P) {l : String} {ρ : Env P} {c : Config P (Cmd P)}
+    (h : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.exiting l ρ) c) : c = .exiting l ρ := by
+  match h with
+  | .refl _ => rfl
+  | .step _ _ _ hstep _ => exact nomatch hstep
+
+/-- Failing-config inversion for a `.seq inner ss` frame. -/
+theorem seqT_reaches_failing' (P : PureExpr) [HasFvar P] [HasFvars P] [HasBoolOps P]
+    [HasVarsPure P P.Expr] (extendFactory : ExtendFactory P)
+    {inner : Config P (Cmd P)} {ss : List (Stmt P (Cmd P))} {c : Config P (Cmd P)}
+    (hstar : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.seq inner ss) c)
+    (hc : c.getEnv.hasFailure = true) :
+    (∃ d, ∃ (h : ReflTransT (StepStmt P (EvalCmd P) extendFactory) inner d),
+        d.getEnv.hasFailure = true ∧ h.len ≤ hstar.len) ∨
+    (∃ (ρ₁ : Env P), ∃ d,
+      ∃ (h1 : ReflTransT (StepStmt P (EvalCmd P) extendFactory) inner (.terminal ρ₁)),
+      ∃ (h2 : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.stmts ss ρ₁) d),
+        d.getEnv.hasFailure = true ∧ h1.len + h2.len < hstar.len) := by
+  suffices H : ∀ n (inn : Config P (Cmd P))
+      (h : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.seq inn ss) c),
+      h.len ≤ n → c.getEnv.hasFailure = true →
+      (∃ d, ∃ (h' : ReflTransT (StepStmt P (EvalCmd P) extendFactory) inn d),
+          d.getEnv.hasFailure = true ∧ h'.len ≤ h.len) ∨
+      (∃ (ρ₁ : Env P), ∃ d,
+        ∃ (h1 : ReflTransT (StepStmt P (EvalCmd P) extendFactory) inn (.terminal ρ₁)),
+        ∃ (h2 : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.stmts ss ρ₁) d),
+          d.getEnv.hasFailure = true ∧ h1.len + h2.len < h.len) by
+    exact H hstar.len inner hstar (Nat.le_refl _) hc
+  intro n
+  induction n with
+  | zero =>
+    intro inn h hlen hc'
+    match h, hlen with
+    | .refl _, _ => left; exact ⟨inn, .refl _, hc', by simp [ReflTransT.len]⟩
+    | .step _ _ _ _ _, hl => simp [ReflTransT.len] at hl
+  | succ n ih =>
+    intro inn h hlen hc'
+    match h, hlen with
+    | .refl _, _ => left; exact ⟨inn, .refl _, hc', by simp [ReflTransT.len]⟩
+    | .step _ (.seq inner₁ _) _ (.step_seq_inner h_inner_step) hrest, hl =>
+      have hlen' : hrest.len ≤ n := by simp [ReflTransT.len] at hl; omega
+      rcases ih inner₁ hrest hlen' hc' with hA | hB
+      · obtain ⟨d, h', hd, hlen''⟩ := hA
+        exact .inl ⟨d, .step _ _ _ h_inner_step h', hd, by simp [ReflTransT.len]; omega⟩
+      · obtain ⟨ρ₁, d, h1, h2, hd, hlen''⟩ := hB
+        exact .inr ⟨ρ₁, d, .step _ _ _ h_inner_step h1, h2, hd, by simp [ReflTransT.len]; omega⟩
+    | .step _ _ _ .step_seq_done hrest, hl =>
+      rename_i ρ'
+      exact .inr ⟨ρ', _, .refl _, hrest, hc', by simp [ReflTransT.len]⟩
+    | .step _ _ _ .step_seq_exit hrest, hl =>
+      rename_i label ρ'
+      left
+      refine ⟨.exiting label ρ', .refl _, ?_, by simp [ReflTransT.len]⟩
+      match hrest with
+      | .refl _ => exact hc'
+      | .step _ _ _ h' _ => exact nomatch h'
+
+/-- Failing-config inversion for a `.block .none σp fp inner` frame. -/
+theorem blockT_none_reaches_failing' (P : PureExpr) [HasFvar P] [HasFvars P] [HasBoolOps P]
+    [HasVarsPure P P.Expr] (extendFactory : ExtendFactory P)
+    {inner : Config P (Cmd P)} {σ_parent : SemanticStore P} {f_parent : P.Factory} {c : Config P (Cmd P)}
+    (hstar : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.block .none σ_parent f_parent inner) c)
+    (hc : c.getEnv.hasFailure = true) :
+    ∃ d, ∃ (h : ReflTransT (StepStmt P (EvalCmd P) extendFactory) inner d),
+      d.getEnv.hasFailure = true ∧ h.len ≤ hstar.len := by
+  suffices H : ∀ n (σ_p : SemanticStore P) (f_p : P.Factory) (inn : Config P (Cmd P))
+      (h : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.block .none σ_p f_p inn) c),
+      h.len ≤ n → c.getEnv.hasFailure = true →
+      ∃ d, ∃ (h' : ReflTransT (StepStmt P (EvalCmd P) extendFactory) inn d),
+        d.getEnv.hasFailure = true ∧ h'.len ≤ h.len by
+    exact H hstar.len σ_parent f_parent inner hstar (Nat.le_refl _) hc
+  intro n
+  induction n with
+  | zero =>
+    intro σ_p f_p inn h hlen hc'
+    match h, hlen with
+    | .refl _, _ => exact ⟨inn, .refl _, hc', by simp [ReflTransT.len]⟩
+    | .step _ _ _ _ _, hl => simp [ReflTransT.len] at hl
+  | succ n ih =>
+    intro σ_p f_p inn h hlen hc'
+    match h, hlen with
+    | .refl _, _ => exact ⟨inn, .refl _, hc', by simp [ReflTransT.len]⟩
+    | .step _ (.block _ _ _ inner₁) _ (.step_block_body h_inner_step) hrest, hl =>
+      have hlen' : hrest.len ≤ n := by simp [ReflTransT.len] at hl; omega
+      have ⟨d, h', hd, hlen''⟩ := ih σ_p f_p inner₁ hrest hlen' hc'
+      exact ⟨d, .step _ _ _ h_inner_step h', hd, by simp [ReflTransT.len]; omega⟩
+    | .step _ _ _ .step_block_done hrest, hl =>
+      have hz := reflTransT_from_terminal P extendFactory hrest
+      refine ⟨_, .refl _, ?_, by simp [ReflTransT.len]⟩
+      rw [hz] at hc'; simpa [Config.getEnv] using hc'
+    | .step _ _ _ (.step_block_exit_match heq) hrest, hl => exact (nomatch heq)
+    | .step _ _ _ (.step_block_exit_mismatch hne) hrest, hl =>
+      have hz := reflTransT_from_exiting P extendFactory hrest
+      refine ⟨_, .refl _, ?_, by simp [ReflTransT.len]⟩
+      rw [hz] at hc'; simpa [Config.getEnv] using hc'
+
+/-- Failing-config inversion for a general `.block l σp fp inner` frame (Prop-level). -/
+theorem block_reaches_failing' (P : PureExpr) [HasFvar P] [HasFvars P] [HasBoolOps P]
+    [HasVarsPure P P.Expr] (extendFactory : ExtendFactory P)
+    {l : Option String} {inner : Config P (Cmd P)} {σ_parent : SemanticStore P}
+    {f_parent : P.Factory} {c : Config P (Cmd P)}
+    (hstar : StepStmtStar P (EvalCmd P) extendFactory (.block l σ_parent f_parent inner) c)
+    (hc : c.getEnv.hasFailure = true) :
+    ∃ d, StepStmtStar P (EvalCmd P) extendFactory inner d ∧ d.getEnv.hasFailure = true := by
+  suffices H : ∀ src tgt, StepStmtStar P (EvalCmd P) extendFactory src tgt →
+      ∀ (lp : Option String) (σ_p : SemanticStore P) (f_p : P.Factory) (inn : Config P (Cmd P)),
+      src = .block lp σ_p f_p inn → tgt.getEnv.hasFailure = true →
+      ∃ d, StepStmtStar P (EvalCmd P) extendFactory inn d ∧ d.getEnv.hasFailure = true by
+    exact H _ _ hstar l σ_parent f_parent inner rfl hc
+  intro src tgt hstar_g
+  induction hstar_g with
+  | refl =>
+    intro lp σ_p f_p inn hsrc hc'
+    subst hsrc; exact ⟨inn, .refl _, by simpa [Config.getEnv] using hc'⟩
+  | step _ mid _ hstep hrest ih =>
+    intro lp σ_p f_p inn hsrc hc'
+    subst hsrc
+    cases hstep with
+    | step_block_body h_inner_step =>
+      rename_i inner₁
+      have ⟨d, h', hd⟩ := ih _ _ _ _ rfl hc'
+      exact ⟨d, .step _ _ _ h_inner_step h', hd⟩
+    | step_block_done =>
+      have hz := reflTransT_from_terminal P extendFactory (reflTrans_to_T hrest)
+      rw [hz] at hc'; exact ⟨_, .refl _, by simpa [Config.getEnv] using hc'⟩
+    | step_block_exit_match heq =>
+      have hz := reflTransT_from_terminal P extendFactory (reflTrans_to_T hrest)
+      rw [hz] at hc'; exact ⟨_, .refl _, by simpa [Config.getEnv] using hc'⟩
+    | step_block_exit_mismatch hne =>
+      have hz := reflTransT_from_exiting P extendFactory (reflTrans_to_T hrest)
+      rw [hz] at hc'; exact ⟨_, .refl _, by simpa [Config.getEnv] using hc'⟩
+
+/-- Singleton-list peel for the failing case. -/
+theorem stmts_singleton_reaches_failing' (P : PureExpr) [HasFvar P] [HasFvars P] [HasBoolOps P]
+    [HasVarsPure P P.Expr] (extendFactory : ExtendFactory P)
+    {s : Stmt P (Cmd P)} {ρ₀ : Env P} {c : Config P (Cmd P)}
+    (hstar : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.stmts [s] ρ₀) c)
+    (hc : c.getEnv.hasFailure = true) :
+    ∃ d, ∃ (h : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.stmt s ρ₀) d),
+      d.getEnv.hasFailure = true ∧ h.len ≤ hstar.len := by
+  match hstar with
+  | .refl _ => exact ⟨.stmt s ρ₀, .refl _, hc, by simp [ReflTransT.len]⟩
+  | .step _ _ _ .step_stmts_cons hrest =>
+    rcases seqT_reaches_failing' P extendFactory hrest hc with hA | hB
+    · obtain ⟨d, h, hd, hlen⟩ := hA
+      exact ⟨d, h, hd, by simp [ReflTransT.len]; omega⟩
+    · obtain ⟨ρ₁, d, h1, h2, hd, hlen⟩ := hB
+      refine ⟨.terminal ρ₁, h1, ?_, by simp [ReflTransT.len]; omega⟩
+      have hρ₁ : ρ₁.hasFailure = true := by
+        have : d.getEnv = ρ₁ := by
+          match h2 with
+          | .refl _ => rfl
+          | .step _ _ _ .step_stmts_nil hr2 =>
+            match hr2 with
+            | .refl _ => rfl
+            | .step _ _ _ h' _ => exact nomatch h'
+        rw [this] at hd; exact hd
+      simpa [Config.getEnv] using hρ₁
+
+/-- Cons-list peel for the failing case. -/
+theorem stmts_cons_reaches_failing' (P : PureExpr) [HasFvar P] [HasFvars P] [HasBoolOps P]
+    [HasVarsPure P P.Expr] (extendFactory : ExtendFactory P)
+    {s : Stmt P (Cmd P)} {rest : List (Stmt P (Cmd P))} {ρ₀ : Env P} {c : Config P (Cmd P)}
+    (hstar : ReflTransT (StepStmt P (EvalCmd P) extendFactory) (.stmts (s :: rest) ρ₀) c)
+    (hc : c.getEnv.hasFailure = true) :
+    (∃ d, StepStmtStar P (EvalCmd P) extendFactory (.stmt s ρ₀) d ∧
+        d.getEnv.hasFailure = true) ∨
+    (∃ (ρ₁ : Env P), ∃ d,
+      StepStmtStar P (EvalCmd P) extendFactory (.stmt s ρ₀) (.terminal ρ₁) ∧
+      StepStmtStar P (EvalCmd P) extendFactory (.stmts rest ρ₁) d ∧
+        d.getEnv.hasFailure = true) := by
+  match hstar with
+  | .refl _ => exact .inl ⟨.stmt s ρ₀, .refl _, by simpa [Config.getEnv] using hc⟩
+  | .step _ _ _ .step_stmts_cons hrest =>
+    rcases seqT_reaches_failing' P extendFactory hrest hc with hA | hB
+    · obtain ⟨d, h, hd, _⟩ := hA
+      exact .inl ⟨d, reflTransT_to_prop h, hd⟩
+    · obtain ⟨ρ₁, d, h1, h2, hd, _⟩ := hB
+      exact .inr ⟨ρ₁, d, reflTransT_to_prop h1, reflTransT_to_prop h2, hd⟩
+
+/-- Inversion of a *labeled* (`.some label`) block reaching terminal: the inner
+config either terminates or exits via the block's own label (which the block then
+consumes); either way the result store is projected through the parent. -/
+theorem block_some_reaches_terminal (P : PureExpr) {CmdT : Type} [HasBoolOps P]
+    (EvalCmd : EvalCmdParam P CmdT) (extendFactory : ExtendFactory P)
+    {inner : Config P CmdT} {label : String} {σ_parent : SemanticStore P}
+    {f_parent : P.Factory} {ρ' : Env P}
+    (hstar : StepStmtStar P EvalCmd extendFactory
+      (.block (.some label) σ_parent f_parent inner) (.terminal ρ')) :
+    (∃ ρ_inner, StepStmtStar P EvalCmd extendFactory inner (.terminal ρ_inner) ∧
+      ρ' = { ρ_inner with store := projectStore σ_parent ρ_inner.store, factory := f_parent }) ∨
+    (∃ ρ_inner, StepStmtStar P EvalCmd extendFactory inner (.exiting label ρ_inner) ∧
+      ρ' = { ρ_inner with store := projectStore σ_parent ρ_inner.store, factory := f_parent }) := by
+  suffices h_gen : ∀ src tgt, StepStmtStar P EvalCmd extendFactory src tgt →
+      ∀ inner ρ', src = .block (.some label) σ_parent f_parent inner → tgt = .terminal ρ' →
+      (∃ ρ_inner, StepStmtStar P EvalCmd extendFactory inner (.terminal ρ_inner) ∧
+        ρ' = { ρ_inner with store := projectStore σ_parent ρ_inner.store, factory := f_parent }) ∨
+      (∃ ρ_inner, StepStmtStar P EvalCmd extendFactory inner (.exiting label ρ_inner) ∧
+        ρ' = { ρ_inner with store := projectStore σ_parent ρ_inner.store, factory := f_parent }) from
+    h_gen _ _ hstar _ _ rfl rfl
+  intro src tgt hstar_g
+  induction hstar_g with
+  | refl => intro _ _ hsrc htgt; subst hsrc; cases htgt
+  | step _ mid _ hstep hrest ih =>
+    intro inner ρ' hsrc htgt; subst hsrc
+    cases hstep with
+    | step_block_body h =>
+      match ih _ _ rfl htgt with
+      | .inl ⟨ρ_inner, hterm, heq⟩ => exact .inl ⟨ρ_inner, .step _ _ _ h hterm, heq⟩
+      | .inr ⟨ρ_inner, hexit, heq⟩ => exact .inr ⟨ρ_inner, .step _ _ _ h hexit, heq⟩
+    | step_block_done =>
+      subst htgt; cases hrest with
+      | refl => exact .inl ⟨_, .refl _, rfl⟩
+      | step _ _ _ h _ => cases h
+    | step_block_exit_match heq =>
+      injection heq with h_eq
+      subst h_eq
+      subst htgt; cases hrest with
+      | refl => exact .inr ⟨_, .refl _, rfl⟩
+      | step _ _ _ h _ => cases h
+    | step_block_exit_mismatch =>
+      subst htgt; cases hrest with | step _ _ _ h _ => cases h
+
+/-- **Two-parent `projectStore` survival for `StoreAgreement`.**  Agreeing parents
++ agreeing inner stores ⟹ the block-projected stores agree (a projected key is
+either parent-defined, where the inner stores agree, or parent-undefined, where
+both projections are `none`).  Re-establishes agreement across each loop
+iteration's `projectStore` boundary. -/
+theorem StoreAgreement.of_projectStore_parents {P : PureExpr}
+    {σp_src σp_tgt σi_src σi_tgt : SemanticStore P}
+    (h_par : StoreAgreement σp_src σp_tgt)
+    (h_inn : StoreAgreement σi_src σi_tgt) :
+    StoreAgreement (projectStore σp_src σi_src) (projectStore σp_tgt σi_tgt) := by
+  intro x h_def
+  have h := h_def x (List.mem_singleton.mpr rfl)
+  simp only [projectStore] at h ⊢
+  by_cases hp : (σp_src x).isSome
+  · rw [if_pos hp] at h ⊢
+    have h_inn_x : σi_src x = σi_tgt x :=
+      h_inn x (fun z hz => by simpa [List.mem_singleton.mp hz] using h)
+    have h_par_x : σp_src x = σp_tgt x :=
+      h_par x (fun z hz => by simpa [List.mem_singleton.mp hz] using hp)
+    have hpt : (σp_tgt x).isSome := by rw [← h_par_x]; exact hp
+    rw [if_pos hpt, h_inn_x]
+  · rw [if_neg hp] at h; simp at h
+
+/-- When every read-var of `e` is defined in the source store, `StoreAgreement`
+pins the two stores to equal values on those vars.  No freshness side-condition
+is needed — a source-defined var is exactly where `StoreAgreement` constrains the
+target. -/
+theorem storeAgreement_pointwise_on_expr_vars {P : PureExpr} [HasIdent P]
+    [HasVarsPure P P.Expr]
+    (σ_src σ_tgt : SemanticStore P) (e : P.Expr)
+    (h_agree : StoreAgreement σ_src σ_tgt)
+    (h_def : isDefined σ_src (HasVarsPure.getVars e)) :
+    ∀ x ∈ HasVarsPure.getVars e, σ_src x = σ_tgt x :=
+  fun x hx => h_agree x (fun z hz => by
+    simpa [List.mem_singleton.mp hz] using h_def x hx)
 
 end -- public section
 end Imperative

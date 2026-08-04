@@ -18,11 +18,13 @@ import Strata.DL.Imperative
 
 /- Utilities -/
 import Strata.Util.NameProofs
+import Strata.Util.OrderedSetProps
 import Strata.Util.Sarif
 
 /- Strata Languages -/
 import Strata.Languages.Core.FactoryWF
 import Strata.Languages.Core.SeqModel
+import Strata.Languages.Core.SMTEncoderProps
 import Strata.Languages.Core.StatementSemantics
 import Strata.Languages.Core.SarifOutput
 
@@ -32,7 +34,10 @@ import Strata.Languages.Laurel.LaurelCompilationPipeline
 /- Code Transforms -/
 import Strata.Transform.CallElimCorrect
 import Strata.Transform.CoreSpecification
+import Strata.Transform.CoreTransformProps
 import Strata.Transform.DetToKleeneCorrect
+import Strata.Transform.LoopInitHoist
+import Strata.Transform.NondetElim
 import Strata.Transform.ProcBodyVerifyCorrect
 
 /- Strata Languages — additional -/
@@ -45,6 +50,7 @@ import Strata.Languages.Dyn.Dyn
 import Strata.Languages.Dyn.Verify
 import Strata.Languages.GOTO
 import Strata.Languages.Laurel.FilterPrelude
+import Strata.Languages.Laurel.Grammar.ConcreteToAbstractTreeTranslatorProps
 
 /- DDM -/
 import StrataDDM
@@ -59,6 +65,7 @@ import Strata.DL.SMT.Translate
 
 /- Code Transforms — additional -/
 import Strata.Transform.StructuredToUnstructured
+import Strata.Transform.FunctionInlining
 
 /- Other -/
 import Strata.MetaVerifier
@@ -87,16 +94,22 @@ import Strata.DL.Lambda.Denote.LExprDenoteSubst
 import Strata.DL.Lambda.Denote.LExprDenoteTySubst
 import Strata.DL.Lambda.Denote.LExprSemanticsConsistent
 import Strata.DL.Lambda.LExprTypeSpec
-import Strata.DL.Lambda.MetaData
 import Strata.DL.Lambda.Reflect
 import Strata.DL.Lambda.Semantics
 import Strata.DL.Lambda.TypeFactoryWF
 import Strata.DL.Util.HList
 import Strata.Languages.Core.ProgramWF
 import Strata.Languages.Core.StatementWF
+-- Type-soundness proof chain (transitively pulls Function/Statement/Cmd/Command/Procedure
+-- TypeSpecProps) so `lake build` compiles and sorry-checks the whole proof development.
+import Strata.Languages.Core.ProcedureTypeSpecProps
+import Strata.DL.Lambda.DatatypeWF
+import Strata.Languages.Core.DatatypeTypeSpec
+import Strata.Languages.Core.ProgramTypeSpec
 import Strata.Languages.Dyn.DDMTransform.Parse
 import Strata.Languages.Dyn.DDMTransform.Translate
 import Strata.Util.Random
+
 
 import Strata.Examples.Embedded
 import Strata.Examples.EmbeddedData

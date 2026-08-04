@@ -4,6 +4,7 @@
   SPDX-License-Identifier: Apache-2.0 OR MIT
 -/
 module
+import all Strata.DL.Lambda.LTyProps
 
 public import Strata.DL.Imperative.SMTUtils
 public import Strata.DL.SMT.Factory
@@ -20,7 +21,7 @@ import Strata.Util.Tactics
 namespace Core
 open Std (ToFormat Format format)
 open Lambda Strata.SMT Strata.SMT.Encoder
-open Strata.Util (OrderedSet)
+open Strata.Util (OrderedSet OrderedKeyedSet)
 
 public section
 /--
@@ -45,6 +46,10 @@ structure SMT.PendingFnDef where
 deriving Repr, Inhabited
 
 /--
+An insertion-ordered, `uf`-deduplicated queue of `PendingFnDef`s. -/
+abbrev SMT.PendingFnQueue : Type := OrderedKeyedSet ((·.uf) : SMT.PendingFnDef → UF)
+
+/--
 A factory function whose body and axioms have been encoded to SMT `Term`s,
 ready to be committed to the `SMT.Context`.
 -/
@@ -57,6 +62,30 @@ structure SMT.EncodedFnDef where
 deriving Repr, Inhabited
 
 /--
+The encoder's datatype registry: the env's `TypeFactory` (kept in topological,
+mutual-block order for emission) paired with a name→datatype index for O(1)
+lookup during encoding.
+-/
+structure SMT.Datatypes where
+  private mk ::
+  factory : @Lambda.TypeFactory CoreLParams.IDMeta
+  private index : Std.HashMap String (LDatatype CoreLParams.IDMeta)
+deriving Repr, Inhabited
+
+/-- Build a `Datatypes` from a `TypeFactory`, computing the name index in one
+    pass. -/
+def SMT.Datatypes.ofFactory (tf : @Lambda.TypeFactory CoreLParams.IDMeta) : SMT.Datatypes :=
+  .mk tf (tf.allDatatypes.foldl (fun m d => m.insertIfNew d.name d) {})
+
+/-- The empty registry (no datatypes). -/
+def SMT.Datatypes.empty : SMT.Datatypes := .ofFactory #[]
+
+/-- Lookup a datatype by name. -/
+def SMT.Datatypes.getType (d : SMT.Datatypes) (name : String) :
+    Option (LDatatype CoreLParams.IDMeta) :=
+  d.index.get? name
+
+/--
 SMT.Context holds the list of created SMT sorts, declared/defined functions, axioms,
 type substitutions and others while translating Imperative.ProofObligation Expression to
 SMT. This is one of the returned objects from ProofObligation.toSMTTerms.
@@ -66,21 +95,20 @@ explicitly marked as invariant in their comments.
 -/
 structure SMT.Context where
   /-- Declared SMT sorts, plus uninterpreted functions, defined functions, and
-  axioms. Each is an `OrderedSet`, which keeps insertion order for emit while
-  deduplicating in O(1) via a built-in membership index (the array and index
-  cannot drift apart). -/
+  axioms. Each keeps insertion order for emit while deduplicating in O(1) via a
+  built-in membership index (the array and index cannot drift apart). -/
   sorts : OrderedSet Strata.DL.SMT.Sort := .empty
   ufs : OrderedSet UF := .empty
-  ifs : OrderedSet IF := .empty
+  ifs : OrderedKeyedSet IF.toUF := .empty
   axms : OrderedSet Term := .empty
   tySubst: Map String TermType := []
-  /-- Stores the TypeFactory purely for ordering datatype declarations
-  correctly (TypeFactory in topological order).
-  It is seeded by the caller (from the env's datatype factory) before encoding
-  and is not modified afterwards — it holds *all* known datatypes, including
-  ones never referenced by the encoded terms; `seenDatatypes` records which of
-  them are actually used. -/
-  typeFactory : @Lambda.TypeFactory CoreLParams.IDMeta := #[]
+  /-- The known datatypes: the `TypeFactory` (kept in topological order for
+  emission) together with a name→datatype index for O(1) lookup. Seeded by the
+  caller (from the env's datatype factory) before encoding, via
+  `SMT.Datatypes.ofFactory`/`withTypeFactory`, and not modified afterwards — it
+  holds *all* known datatypes, including ones never referenced by the encoded
+  terms; `seenDatatypes` records which of them are actually used. -/
+  datatypes : SMT.Datatypes := .empty
   seenDatatypes : Std.HashSet String := {}
   datatypeFuns : Std.HashMap String (Op.DatatypeFuncs × LConstr CoreLParams.IDMeta) := {}
   /-- Global counter for generating unique bound variable names across all terms. -/
@@ -123,12 +151,7 @@ def SMT.Context.addResolvedFnDef (ctx : SMT.Context) (rdef : SMT.EncodedFnDef) :
 /-- True if the function `uf`'s declaration has already been committed: it is
     in `ufs` (uninterpreted) or `ifs` (interpreted). -/
 def SMT.Context.committedFn (ctx : SMT.Context) (uf : UF) : Bool :=
-  ctx.ufs.contains uf || ctx.ifs.toArray.any (·.toUF == uf)
-
-/-- True if the function `uf` is already committed in `ctx` or scheduled in the
-    pending queue `pending`. Used to dedup function scheduling. -/
-def SMT.Context.knowsFn (ctx : SMT.Context) (pending : List SMT.PendingFnDef) (uf : UF) : Bool :=
-  ctx.committedFn uf || pending.any (·.uf == uf)
+  ctx.ufs.contains uf || ctx.ifs.containsKey uf
 
 def SMT.Context.addSubst (ctx : SMT.Context) (newSubst: Map String TermType) : SMT.Context :=
   { ctx with tySubst := ctx.tySubst ++ newSubst }
@@ -144,7 +167,7 @@ def SMT.Context.hasDatatype (ctx : SMT.Context) (name : String) : Bool :=
     registry so that later UF/function encoding cannot collide with them. -/
 def SMT.Context.preDeclaredNames (ctx : SMT.Context) : Std.HashSet String :=
   let sortNames := ctx.sorts.toArray.foldl (init := ({} : Std.HashSet String)) fun acc s => acc.insert s.name
-  let dtNames := ctx.typeFactory.toList.foldl (init := sortNames) fun acc block =>
+  let dtNames := ctx.datatypes.factory.toList.foldl (init := sortNames) fun acc block =>
     block.foldl (init := acc) fun acc d =>
       if ctx.seenDatatypes.contains d.name then
         let acc := acc.insert d.name
@@ -175,7 +198,7 @@ def SMT.Context.addDatatype (ctx : SMT.Context) (d : LDatatype CoreLParams.IDMet
     { ctx with seenDatatypes := ctx.seenDatatypes.insert d.name, datatypeFuns := m }
 
 def SMT.Context.withTypeFactory (ctx : SMT.Context) (tf : @Lambda.TypeFactory CoreLParams.IDMeta) : SMT.Context :=
-  { ctx with typeFactory := tf }
+  { ctx with datatypes := .ofFactory tf }
 
 /--
 Helper function to convert LMonoTy to TermType for datatype constructor fields.
@@ -224,10 +247,10 @@ Only emits datatypes that have been seen (added via addDatatype).
 Single-element blocks use declare-datatype, multi-element blocks use declare-datatypes.
 -/
 def SMT.Context.emitDatatypes (ctx : SMT.Context) : Strata.SMT.SolverM Unit := do
-  match validateDatatypesForSMT ctx.typeFactory ctx.seenDatatypes with
+  match validateDatatypesForSMT ctx.datatypes.factory ctx.seenDatatypes with
   | .error msg => throw (IO.userError (toString msg))
   | .ok () => pure ()
-  for block in ctx.typeFactory.toList do
+  for block in ctx.datatypes.factory.toList do
     let usedBlock := block.filter (fun d => ctx.seenDatatypes.contains d.name)
     match usedBlock with
     | [] => pure ()
@@ -283,11 +306,15 @@ partial def SMT.Context.addType (id: String) (args: List LMonoTy) (ctx: SMT.Cont
       if isBuiltinCoreTy id1 then ctx
       else SMT.Context.addType id1 args1 ctx
     | _ => ctx) ctx
-  -- Datatypes are looked up from the context's `typeFactory` (seeded by the
-  -- caller from the env's datatypes); see `SMT.Context.typeFactory`.
-  match ctx.typeFactory.getType id with
+  -- Already registered: its constructors were recursed when first added, so
+  -- there is nothing to do. `seenDatatypes` only ever holds factory datatype
+  -- names (its sole writer is `addDatatype`, called below on a `getType`
+  -- result), so this branch fires only for factory datatypes (emitted as
+  -- declare-datatype), never for the opaque sorts (declare-sort) the `none`
+  -- branch handles.
+  if ctx.hasDatatype id then ctx
+  else match ctx.datatypes.getType id with
   | some d =>
-    if ctx.hasDatatype id then ctx else
     let ctx := ctx.addDatatype d
     d.constrs.foldl (fun (ctx : SMT.Context) c =>
       c.args.foldl (fun (ctx: SMT.Context) (_, t) =>
@@ -540,11 +567,11 @@ def corePredefinedOpToSMTOp (op : CoreOp) (ctx : SMT.Context) :
 
     Returns the updated `SMT.Context` and pending-definition queue `pending`:
     for a user-defined factory function this only registers the `UF` and
-    *appends* a `PendingFnDef` (deferring body/axiom encoding); the queue is
-    threaded through term encoding and drained later by `drainPendingFnDefs`. -/
+    *schedules* a `PendingFnDef` (deferring body/axiom encoding); the queue is
+    threaded through term encoding and drained later by `processPendingFnDefs`. -/
 def toSMTOp (factory : @Lambda.Factory CoreLParams) (fn : CoreIdent) (fnty : LMonoTy) (ctx : SMT.Context)
-  (pending : List SMT.PendingFnDef) :
-  Except Format ((List Term → TermType → Term) × TermType × SMT.Context × List SMT.PendingFnDef) :=
+  (pending : SMT.PendingFnQueue) :
+  Except Format ((List Term → TermType → Term) × TermType × SMT.Context × SMT.PendingFnQueue) :=
   open LTy.Syntax in do
   -- Encode the type to ensure any datatypes are registered in the context
   let tys := LMonoTy.destructArrow fnty
@@ -612,24 +639,30 @@ def toSMTOp (factory : @Lambda.Factory CoreLParams) (fn : CoreIdent) (fnty : LMo
         else
           -- Defer encoding the function's definition (interpreted body and/or
           -- axioms). Those would require calling `toSMTTerm` on expressions
-          -- drawn from the factory; append a `PendingFnDef` to the queue instead.
-          let pending := if ctx.knowsFn pending uf then pending
-            else pending ++ [{ fn := fn, uf := uf, fnty := fnty, tySubst := ctx.tySubst }]
+          -- drawn from the factory; schedule a `PendingFnDef` instead. Skip
+          -- functions already committed.
+          let pending := if ctx.committedFn uf then pending
+            else pending.insert { fn := fn, uf := uf, fnty := fnty, tySubst := ctx.tySubst }
           .ok (.app (Op.uf uf), smt_outty, ctx, pending)
 
 mutual
 
 @[expose]
 def toSMTTerm (factory : @Lambda.Factory CoreLParams) (bvs : BoundVars) (e : LExpr CoreLParams.mono) (ctx : SMT.Context)
-  (pending : List SMT.PendingFnDef)
-  : Except Format (Term × SMT.Context × List SMT.PendingFnDef) := do
+  (pending : SMT.PendingFnQueue)
+  : Except Format (Term × SMT.Context × SMT.PendingFnQueue) := do
   match e with
   | .boolConst _ b => .ok (Term.bool b, ctx, pending)
   | .intConst _ i => .ok (Term.int i, ctx, pending)
   | .realConst _ r =>
     match StrataDDM.Decimal.fromRat r with
     | some d => .ok (Term.real d, ctx, pending)
-    | none => .error f!"Non-decimal real value {e}"
+    | none =>
+      -- `r` has no terminating decimal expansion (e.g. `1/3`), so encode it as
+      -- the exact real division `(/ num den)` rather than erroring.
+      let num := Term.real (StrataDDM.Decimal.ofInt r.num)
+      let den := Term.real (StrataDDM.Decimal.ofInt (Int.ofNat r.den))
+      .ok (.app Op.rdiv [num, den] .real, ctx, pending)
   | .bitvecConst _ n b => .ok (Term.bitvec b, ctx, pending)
   | .strConst _ s => .ok (Term.string s, ctx, pending)
   | .op _ fn fnty =>
@@ -718,8 +751,8 @@ decreasing_by
     right to left as the spine is peeled. -/
 def appToSMTTerm (factory : @Lambda.Factory CoreLParams) (bvs : BoundVars) (fn arg : LExpr CoreLParams.mono)
   (acc : List Term) (ctx : SMT.Context)
-  (pending : List SMT.PendingFnDef) :
-  Except Format (Term × SMT.Context × List SMT.PendingFnDef) := do
+  (pending : SMT.PendingFnQueue) :
+  Except Format (Term × SMT.Context × SMT.PendingFnQueue) := do
   match fn, arg with
   -- Special case for indexed SMT operations. The loop bounds must be natural
   -- number literals. Partial evaluation reduces the index expressions to
@@ -805,16 +838,16 @@ def resolveOnePendingFnDef (factory : @Lambda.Factory CoreLParams)
   -- Encode the body (interpreted functions) or leave it uninterpreted.
   let (body?, ctx, pending) ←
     if func.isRecursive then
-      .ok (none, ctx, ([] : List SMT.PendingFnDef))
+      .ok (none, ctx, ({} : SMT.PendingFnQueue))
     else match func.body with
-    | none => .ok (none, ctx, ([] : List SMT.PendingFnDef))
+    | none => .ok (none, ctx, ({} : SMT.PendingFnQueue))
     | some body =>
       -- Substitute the formals in the function body with appropriate `.bvar`s.
       -- Use substFvarsLifting to properly lift indices under binders.
       let bvs := args.map fun v => (v.id, v.ty)
       let bvars := (List.range formals.length).map (fun i => LExpr.bvar () i)
       let body := LExpr.substFvarsLifting body (formals.zip bvars)
-      let (term, ctx, pending) ← toSMTTerm factory bvs body ctx []
+      let (term, ctx, pending) ← toSMTTerm factory bvs body ctx {}
       .ok (some term, ctx, pending)
 
   -- Encode the function's axioms (recursive-function axioms are pre-computed by
@@ -834,7 +867,7 @@ def resolveOnePendingFnDef (factory : @Lambda.Factory CoreLParams)
       .ok (axiom_term :: axs, ctx.restoreSubst seededSubst, pending))
   -- Restore the substitution that was active before this function.
   .ok ({ id := p.uf.id, args, out := p.uf.out, body?, axioms := axiomTermsRev.reverse },
-       ctx.restoreSubst savedSubst, pending)
+       ctx.restoreSubst savedSubst, pending.toList)
 
 /--
 Resolve and commit the transitive closure of deferred function definitions
@@ -843,7 +876,7 @@ The fuel is set to factory.toArray.size + pending.length, which is enough to
 visit all bodies and axioms. It is used to make the termination proof easier.
 -/
 def processPendingFnDefsAux (factory : @Lambda.Factory CoreLParams) (fuel : Nat)
-    (ctx : SMT.Context) (seen : List UF)
+    (ctx : SMT.Context) (seen : Std.HashSet UF)
     (pending : List SMT.PendingFnDef) :
     Except Format SMT.Context := do
   match pending with
@@ -859,7 +892,7 @@ def processPendingFnDefsAux (factory : @Lambda.Factory CoreLParams) (fuel : Nat)
       | fuel + 1 =>
         -- Mark `p` in progress *before* encoding so a self/mutual reference in
         -- its body or axioms does not re-schedule it.
-        let seen := p.uf :: seen
+        let seen := seen.insert p.uf
         let (rdef, ctx, deps) ← resolveOnePendingFnDef factory ctx p
         -- Commit the dependencies discovered while encoding `p` first, so they
         -- are committed before `p` (callee-before-caller), then commit `p`.
@@ -875,18 +908,22 @@ decreasing_by
     The initial fuel covers the factory size (each function is committed at most
     once). -/
 def processPendingFnDefs (factory : @Lambda.Factory CoreLParams)
-    (ctx : SMT.Context) (pending : List SMT.PendingFnDef) : Except Format SMT.Context :=
-  processPendingFnDefsAux factory (factory.toArray.size + pending.length) ctx [] pending
+    (ctx : SMT.Context) (pending : SMT.PendingFnQueue) : Except Format SMT.Context :=
+  processPendingFnDefsAux factory (factory.toArray.size + pending.size) ctx {} pending.toList
 
 def toSMTTerms (factory : @Lambda.Factory CoreLParams) (es : List (LExpr CoreLParams.mono)) (ctx : SMT.Context)
-  (pending : List SMT.PendingFnDef) :
-  Except Format ((List Term) × SMT.Context × List SMT.PendingFnDef) := do
-  match es with
-  | [] => .ok ([], ctx, pending)
-  | e :: erest =>
-    let (et, ctx, pending) ← toSMTTerm factory [] e ctx pending
-    let (erestt, ctx, pending) ← toSMTTerms factory erest ctx pending
-    .ok ((et :: erestt), ctx, pending)
+  (pending : SMT.PendingFnQueue) :
+  Except Format ((List Term) × SMT.Context × SMT.PendingFnQueue) :=
+  go es ctx pending #[]
+where
+  go (es : List (LExpr CoreLParams.mono)) (ctx : SMT.Context) (pending : SMT.PendingFnQueue)
+     (acc : Array Term) :
+     Except Format ((List Term) × SMT.Context × SMT.PendingFnQueue) := do
+    match es with
+    | [] => return (acc.toList, ctx, pending)
+    | e :: erest =>
+      let (et, ctx, pending) ← toSMTTerm factory [] e ctx pending
+      go erest ctx pending (acc.push et)
 
 /--
 A variable definition to be emitted as `define-fun` in SMT-LIB.
@@ -939,7 +976,7 @@ def ProofObligation.toSMTTerms (factory : @Lambda.Factory CoreLParams)
 
   -- `pending` accumulates factory functions whose definitions `toSMTOp` defers;
   -- it is threaded through all term encoding below and drained once at the end.
-  let pending : List SMT.PendingFnDef := []
+  let pending : SMT.PendingFnQueue := {}
 
   -- 2. Encode distinctness facts, one `distinct` assertion per group.
   let (ctx, pending, distinct_terms) ← distinctGroups.foldlM (λ (ctx, pending, tss) es =>
@@ -995,7 +1032,7 @@ def ProofObligation.toSMTTerms (factory : @Lambda.Factory CoreLParams)
 def toSMTCommandsWithAssert (e : LExpr CoreLParams.mono)
   (factory : @Lambda.Factory CoreLParams := Core.Factory) (ctx : SMT.Context := SMT.Context.default)
   : IO String := do
-  let smtctx := toSMTTerm factory [] e ctx []
+  let smtctx := toSMTTerm factory [] e ctx {}
   match smtctx with
   | .error e => return e.pretty
   | .ok (smt, _, _) =>
