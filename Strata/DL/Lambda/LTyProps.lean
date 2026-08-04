@@ -95,7 +95,7 @@ theorem LMonoTys.freeVars_subset
     | inr hmem => exact ih (fun t ht => h t (.tail _ ht)) hmem
 
 /-- Each element's free vars are a subset of the whole list's free vars. -/
-theorem LMonoTys.freeVars_mem_subset
+public theorem LMonoTys.freeVars_mem_subset
     {ty : LMonoTy} {tys : List LMonoTy}
     (ht : ty ∈ tys)
     : LMonoTy.freeVars ty ⊆ LMonoTys.freeVars tys := by
@@ -106,7 +106,7 @@ theorem LMonoTys.freeVars_mem_subset
     grind
 
 /-- If `v ∈ LMonoTys.freeVars tys`, then some element of `tys` contains `v`. -/
-theorem LMonoTys.freeVars_exists
+public theorem LMonoTys.freeVars_exists
     {v : TyIdentifier} {tys : List LMonoTy}
     (hv : v ∈ LMonoTys.freeVars tys)
     : ∃ ty, ty ∈ tys ∧ v ∈ LMonoTy.freeVars ty := by

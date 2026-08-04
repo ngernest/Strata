@@ -5,6 +5,11 @@
 -/
 module
 
+-- `public import` exposes the signature symbols (`Factory`, `LFunc`, `LExpr`)
+-- named by the `public` theorems below, so downstream (non-`module`) consumers
+-- can use them without an `import all` shim; `import all` additionally brings in
+-- the private internals the proofs unfold.
+public import Strata.DL.Lambda.Factory
 import all Strata.DL.Lambda.Factory
 
 /-!
@@ -295,12 +300,12 @@ theorem getElem?_is_some_implies_mem {T} {f : Factory T} {name : String} {fn : L
       exact f.nameMapValid h_mem
     exact Array.mem_def.mpr (Array.getElem_mem_toList idx_lt)
 
-theorem getElem?_some_implies_mem {T} {f : Factory T} {name : String} {fn : LFunc T}
+public theorem getElem?_some_implies_mem {T} {f : Factory T} {name : String} {fn : LFunc T}
     (eq : f[name]? = some fn) : name ∈ f := by
   simp +instances [instGetElem?, Factory.get?, instMem, Factory.mem] at eq ⊢
   grind
 
-theorem getElem?_some_getElem {T} {f : Factory T} {name : String} {fn : LFunc T}
+public theorem getElem?_some_getElem {T} {f : Factory T} {name : String} {fn : LFunc T}
     (eq : f[name]? = some fn) : f[name]'(getElem?_some_implies_mem eq) = fn := by
   simp +instances [instGetElem?, Factory.get?, Factory.get] at eq ⊢
   split at eq
@@ -308,7 +313,7 @@ theorem getElem?_some_getElem {T} {f : Factory T} {name : String} {fn : LFunc T}
   · rename_i idx h_idx; simp at eq; grind
 
 /-- If `fn ∈ F.toArray` and `fn.name.name = s`, then `s ∈ F` and `F[s] = fn`. -/
-theorem mem_name_eq_getElem {T} {F : Factory T} {fn : LFunc T} {s : String}
+public theorem mem_name_eq_getElem {T} {F : Factory T} {fn : LFunc T} {s : String}
     (hmem : fn ∈ F.toArray) (hname : fn.name.name = s) :
     ∃ (hs : s ∈ F), F[s]'hs = fn := by
   rw [Array.mem_def] at hmem
