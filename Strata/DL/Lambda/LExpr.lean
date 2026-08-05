@@ -8,6 +8,7 @@ module
 public import Strata.DL.Lambda.LTy
 public import Strata.DL.Lambda.Identifiers
 public import Lean.Meta.Basic
+public import Strata.Util.PtrCache
 import Strata.DL.Util.DecidableEq
 
 /-! ## Lambda Expressions with Quantifiers
@@ -453,7 +454,7 @@ def hashOptTy [Hashable TT] (ty : Option TT) : UInt64 :=
 
 /-- Hash an expression structurally, including type annotations but ignoring
     metadata. Useful for HashMap-based deduplication. -/
-def hashExpr {T : LExprParamsT} [Hashable T.TypeType] : LExpr T → UInt64
+@[expose] def hashExpr {T : LExprParamsT} [Hashable T.TypeType] : LExpr T → UInt64
   | .const _ c => hashConst (hash c)
   | .bvar _ i => hashBVar (hash i)
   | .fvar _ n ty => hashFVar (hash n.name) (hashOptTy ty)
@@ -465,6 +466,56 @@ def hashExpr {T : LExprParamsT} [Hashable T.TypeType] : LExpr T → UInt64
   | .quant _ k name ty tr body =>
     let kh : UInt64 := match k with | .all => 0 | .exist => 1
     hashQuantExpr kh (hash name) (hashOptTy ty) (hashExpr tr) (hashExpr body)
+
+-------------------------------------------------------------------------
+-- Safe, graph-time structural hash
+-------------------------------------------------------------------------
+
+section
+
+open Strata.PtrCache
+
+/-- Safe, pointer-address-memoized structural hash. Each physically distinct
+    subterm is hashed exactly once, keyed by its memory address via the safe
+    `PtrCache`. The returned `Result hashExpr e` carries a proof that the value
+    equals `hashExpr e`. -/
+def hashExprPtrCache {T : LExprParamsT} [Hashable T.TypeType] :
+    (e : LExpr T) → PtrCacheM (hashExpr : LExpr T → UInt64) e
+  | .const _ c => pure ⟨hashConst (hash c), by simp [hashExpr]⟩
+  | .bvar _ i => pure ⟨hashBVar (hash i), by simp [hashExpr]⟩
+  | .fvar _ n ty => pure ⟨hashFVar (hash n.name) (hashOptTy ty), by simp [hashExpr]⟩
+  | .op _ o ty => pure ⟨hashOp (hash o.name) (hashOptTy ty), by simp [hashExpr]⟩
+  | .app _ fn arg => do
+    let rfn ← evalPtrCache fn (hashExprPtrCache fn)
+    let rarg ← evalPtrCache arg (hashExprPtrCache arg)
+    pure ⟨hashApp rfn.output rarg.output, by simp [hashExpr, rfn.h, rarg.h]⟩
+  | .ite _ c t f => do
+    let rc ← evalPtrCache c (hashExprPtrCache c)
+    let rt ← evalPtrCache t (hashExprPtrCache t)
+    let rf ← evalPtrCache f (hashExprPtrCache f)
+    pure ⟨hashIte rc.output rt.output rf.output, by simp [hashExpr, rc.h, rt.h, rf.h]⟩
+  | .eq _ e1 e2 => do
+    let r1 ← evalPtrCache e1 (hashExprPtrCache e1)
+    let r2 ← evalPtrCache e2 (hashExprPtrCache e2)
+    pure ⟨hashEqExpr r1.output r2.output, by simp [hashExpr, r1.h, r2.h]⟩
+  | .abs _ name ty body => do
+    let rb ← evalPtrCache body (hashExprPtrCache body)
+    pure ⟨hashAbs (hash name) (hashOptTy ty) rb.output, by simp [hashExpr, rb.h]⟩
+  | .quant _ k name ty tr body => do
+    let rtr ← evalPtrCache tr (hashExprPtrCache tr)
+    let rb ← evalPtrCache body (hashExprPtrCache body)
+    pure ⟨hashQuantExpr (match k with | .all => 0 | .exist => 1)
+            (hash name) (hashOptTy ty) rtr.output rb.output,
+          by cases k <;> simp [hashExpr, rtr.h, rb.h]⟩
+
+/-- Run the pointer-address-memoized structural hash on `e`.
+    hashExprCached_eq in LExprProps.lean proves that its result equals hashExpr. -/
+def hashExprCached {T : LExprParamsT} [Hashable T.TypeType] (e : LExpr T) : UInt64 :=
+  ((hashExprPtrCache e).run' PtrCache.empty).output
+
+end
+
+-------------------------------------------------------------------------
 
 @[expose, match_pattern]
 protected def true {T : LExprParams} (m : T.Metadata) : LExpr T.mono := .boolConst m true
