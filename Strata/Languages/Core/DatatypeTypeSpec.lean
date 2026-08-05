@@ -54,6 +54,11 @@ structure MutualADTWF (C : LContext CoreLParams) (block : MutualDatatype Unit) :
   /-- Every datatype in the block is inhabited (`checkMutualBlockInhab`, which
       calls `adt_inhab d.name = typesym_inhab adts [] d.name`). -/
   inhabited : ∀ d ∈ block, TySymInhab (C.datatypes.push block) d.name
+  /-- Every free type variable of a constructor argument is one of the enclosing
+      datatype's own `typeArgs` (constructor arguments introduce no fresh type
+      variables). -/
+  argVarsScoped : ∀ d ∈ block, ∀ c ∈ d.constrs, ∀ arg ∈ c.args,
+      ∀ v ∈ LMonoTy.freeVars arg.2, v ∈ d.typeArgs
 
 end -- public section
 
