@@ -116,6 +116,7 @@ inductive StepCFG
       StepCFG P EvalCmd extendFactory fac cfg
         (.inBlock t [] (.condGoto c tlbl elbl md) σ f)
         (.atBlock tlbl σ f)
+  /-- Empty residual + false branch: jump to `.atBlock` of the false label. -/
   | goto_false :
       P.eval fac σ c = .some HasBool.ff →
       WellFormedSemanticEvalBool (P := P) fac →
@@ -123,6 +124,7 @@ inductive StepCFG
       StepCFG P EvalCmd extendFactory fac cfg
         (.inBlock t [] (.condGoto c tlbl elbl md) σ f)
         (.atBlock elbl σ f)
+  /-- Empty residual + `finish`: halt at `.terminal`. -/
   | finish :
       StepCFG P EvalCmd extendFactory fac cfg
         (.inBlock t [] (.finish md) σ f)
@@ -164,7 +166,7 @@ inductive EvalCmds
     EvalCmds P EvalCmdR δ σ' cs σ'' failed' →
     EvalCmds P EvalCmdR δ σ (c :: cs) σ'' (failed || failed')
 
-abbrev StepDetCFGStar {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] [HasVarsPure P P.Expr]
+abbrev StepDetCFGStar {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     (extendFactory : ExtendFactory P)
     (fac : P.Factory)
     (cfg : CFG String (DetBlock String (Cmd P) P)) :=

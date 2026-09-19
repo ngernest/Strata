@@ -26,17 +26,25 @@ Equational theory for the boolean shape walkers defined in
 - Disjointness of `funcDeclNames` from `definedVars`/`declared`
   (`Stmt`/`Block.funcDeclNames_disjoint_of_defined`/`_of_declared`,
   `funcDeclNames_eq_nil_of_noFuncDecl`).
-- Per-constructor decomposition lemmas for `simpleShape`, `loopBodyNoInits`,
+- Per-constructor decomposition lemmas for `noNondetGuards`, `loopBodyNoInits`,
   `loopHasNoInvariants`, `noMeasureLoops`, `initVars`, `exitsCoveredByBlocks`,
   and `getBlockLabels` (the `_cons_iff` / `_branch_*` / `_loop_*` / `_block_*`
   families), plus the two non-structural results `exitsCoveredByBlocks_weaken`
   (label-list monotonicity) and `all_cmd_exitsCoveredByBlocks`.
 - Distribution of the block-level walkers over `++`
-  (`initVars`/`simpleShape`/`loopHasNoInvariants`/`modifiedVars`/
+  (`initVars`/`noNondetGuards`/`loopHasNoInvariants`/`modifiedVars`/
   `noInitsAnywhere`/`loopBodyNoInits`/`getBlockLabels`_append).
 - `Stmt`/`Block.noFuncDecl_mapExpr` — `mapExpr` preserves `noFuncDecl`: rewriting
   the expressions in a statement or block never introduces or removes a
   `funcDecl`.
+- `Stmt`/`Block.mapExpr_eq_mapExprM` — the monadic `mapExprM` at the identity
+  monad `Id` computes the pure `mapExpr`, so reasoning transfers between the two
+  (supported by the `optionMapM_Id`/`listMapM_Id` container lemmas).
+- The def-use bridge: `Stmt`/`Block.defined_of_mem_touchedVars` derive the flat
+  `readWritesDefined` condition from the flow-sensitive `defUseWellFormed`, and
+  `Stmt`/`Block.not_defined_of_mem_definedVars` give the dual for names a statement
+  list defines.  `Strata.Languages.Core.Logic.LangDefProps` consumes both to move a
+  well-formedness condition around a derivation.
 -/
 
 /-! ### Disjointness of funcDeclNames from definedVars
@@ -51,7 +59,7 @@ when combined with `block_preserves_eval_on_disjoint`.
 mutual
 
 theorem Stmt.funcDeclNames_disjoint_of_defined [HasVarsImp P C]
-    [HasFvars P] [HasOps P] [HasOpsImp P C] [HasVarsPure P C] [DecidableEq P.Ident]
+    [HasFvars P] [HasOps P] [HasOpsImp P C] [DecidableEq P.Ident]
     (defined : P.Ident → Bool) (declared : P.Ident → Bool) (s : Stmt P C)
     (hwf : Stmt.defUseWellFormed defined declared s = true) :
     ∀ n ∈ Stmt.funcDeclNames s false, defined n = false := by
@@ -84,7 +92,7 @@ theorem Stmt.funcDeclNames_disjoint_of_defined [HasVarsImp P C]
     exact Block.funcDeclNames_disjoint_of_defined defined declared body hwf.2 n hn
 
 theorem Block.funcDeclNames_disjoint_of_defined [HasVarsImp P C]
-    [HasFvars P] [HasOps P] [HasOpsImp P C] [HasVarsPure P C] [DecidableEq P.Ident]
+    [HasFvars P] [HasOps P] [HasOpsImp P C] [DecidableEq P.Ident]
     (defined : P.Ident → Bool) (declared : P.Ident → Bool) (bss : Block P C)
     (hwf : Block.defUseWellFormed defined declared bss = true) :
     ∀ n ∈ Block.funcDeclNames bss false, defined n = false := by
@@ -113,7 +121,7 @@ mutual
     given `Stmt.defUseWellFormed defined declared s = true`.  This is the
     operator-level analog of `Stmt.funcDeclNames_disjoint_of_defined`. -/
 theorem Stmt.funcDeclNames_disjoint_of_declared [HasVarsImp P C]
-    [HasFvars P] [HasOps P] [HasOpsImp P C] [HasVarsPure P C] [DecidableEq P.Ident]
+    [HasFvars P] [HasOps P] [HasOpsImp P C] [DecidableEq P.Ident]
     (defined : P.Ident → Bool) (declared : P.Ident → Bool) (s : Stmt P C)
     (hwf : Stmt.defUseWellFormed defined declared s = true) :
     ∀ n ∈ Stmt.funcDeclNames s false, declared n = false := by
@@ -146,7 +154,7 @@ theorem Stmt.funcDeclNames_disjoint_of_declared [HasVarsImp P C]
     exact Block.funcDeclNames_disjoint_of_declared defined declared body hwf.2 n hn
 
 theorem Block.funcDeclNames_disjoint_of_declared [HasVarsImp P C]
-    [HasFvars P] [HasOps P] [HasOpsImp P C] [HasVarsPure P C] [DecidableEq P.Ident]
+    [HasFvars P] [HasOps P] [HasOpsImp P C] [DecidableEq P.Ident]
     (defined : P.Ident → Bool) (declared : P.Ident → Bool) (bss : Block P C)
     (hwf : Block.defUseWellFormed defined declared bss = true) :
     ∀ n ∈ Block.funcDeclNames bss false, declared n = false := by
@@ -210,84 +218,87 @@ end
 
 /-! ### Decomposition lemmas for the structural shape predicates
 
-Per-constructor unfolding lemmas for `simpleShape`, `loopBodyNoInits`,
+Per-constructor unfolding lemmas for `noNondetGuards`, `loopBodyNoInits`,
 `loopHasNoInvariants`, `noMeasureLoops`, `initVars`, `exitsCoveredByBlocks`,
 and `getBlockLabels`.  They accompany the `_append` distribution lemmas
 below; the transform correctness proofs consume both.  The predicates
 themselves are defined in `Strata.DL.Imperative.Stmt`. -/
 
-/-- `Block.simpleShape` on `s :: rest` decomposes to the conjunction. -/
-theorem Block.simpleShape_cons_iff
+/-- `Block.noNondetGuards` on `s :: rest` decomposes to the conjunction. -/
+theorem Block.noNondetGuards_cons_iff
     {s : Stmt P (Cmd P)} {rest : List (Stmt P (Cmd P))} :
-    Block.simpleShape (s :: rest) = true ↔
-      Stmt.simpleShape s = true ∧ Block.simpleShape rest = true := by
-  simp only [Block.simpleShape, Bool.and_eq_true]
+    Block.noNondetGuards (s :: rest) = true ↔
+      Stmt.noNondetGuards s = true ∧ Block.noNondetGuards rest = true := by
+  simp only [Block.noNondetGuards, Bool.and_eq_true]
 
-/-- The then-branch of an `.ite (.det _)` is simple when the whole ite is. -/
-theorem Stmt.simpleShape_branch_then
+/-- When a deterministically guarded `.ite` has no nondeterministic guard
+    anywhere, neither does its then-branch. -/
+theorem Stmt.noNondetGuards_branch_then
     {g : P.Expr} {tss ess : List (Stmt P (Cmd P))} {md : MetaData P} :
-    Stmt.simpleShape (.ite (.det g) tss ess md) = true →
-    Block.simpleShape tss = true := by
-  simp only [Stmt.simpleShape, Bool.and_eq_true]
+    Stmt.noNondetGuards (.ite (.det g) tss ess md) = true →
+    Block.noNondetGuards tss = true := by
+  simp only [Stmt.noNondetGuards, Bool.and_eq_true]
   intro h
   exact h.1
 
-/-- The else-branch of an `.ite (.det _)` is simple when the whole ite is. -/
-theorem Stmt.simpleShape_branch_else
+/-- When a deterministically guarded `.ite` has no nondeterministic guard
+    anywhere, neither does its else-branch. -/
+theorem Stmt.noNondetGuards_branch_else
     {g : P.Expr} {tss ess : List (Stmt P (Cmd P))} {md : MetaData P} :
-    Stmt.simpleShape (.ite (.det g) tss ess md) = true →
-    Block.simpleShape ess = true := by
-  simp only [Stmt.simpleShape, Bool.and_eq_true]
+    Stmt.noNondetGuards (.ite (.det g) tss ess md) = true →
+    Block.noNondetGuards ess = true := by
+  simp only [Stmt.noNondetGuards, Bool.and_eq_true]
   intro h
   exact h.2
 
-/-- The body of a `.loop` is simple when the whole loop-statement is. -/
-theorem Stmt.simpleShape_loop_body
+/-- When a `.loop` statement has no nondeterministic guard anywhere, neither
+    does its body. -/
+theorem Stmt.noNondetGuards_loop_body
     {g : ExprOrNondet P} {m : Option P.Expr}
     {is : List (String × P.Expr)} {body : List (Stmt P (Cmd P))}
     {md : MetaData P} :
-    Stmt.simpleShape (.loop g m is body md) = true →
-    Block.simpleShape body = true := by
+    Stmt.noNondetGuards (.loop g m is body md) = true →
+    Block.noNondetGuards body = true := by
   intro h
-  unfold Stmt.simpleShape at h
+  unfold Stmt.noNondetGuards at h
   cases g with
   | det ge => simpa using h
   | nondet => simp at h
 
-/-- The guard of a simple-shape `.loop` is deterministic. -/
-theorem Stmt.simpleShape_loop_guard_det
+/-- The guard of a `.loop` free of nondeterministic guards is deterministic. -/
+theorem Stmt.noNondetGuards_loop_guard_det
     {g : ExprOrNondet P} {m : Option P.Expr}
     {is : List (String × P.Expr)} {body : List (Stmt P (Cmd P))}
     {md : MetaData P} :
-    Stmt.simpleShape (.loop g m is body md) = true →
+    Stmt.noNondetGuards (.loop g m is body md) = true →
     ∃ ge, g = .det ge := by
   intro h
-  unfold Stmt.simpleShape at h
+  unfold Stmt.noNondetGuards at h
   cases g with
   | det ge => exact ⟨ge, rfl⟩
   | nondet => simp at h
 
-theorem Block.loopBodyNoInits_cons_iff
+theorem Block.loopBodyNoInits_cons_iff [HasFvars P]
     {s : Stmt P (Cmd P)} {rest : List (Stmt P (Cmd P))} :
     Block.loopBodyNoInits (s :: rest) = true ↔
       Stmt.loopBodyNoInits s = true ∧ Block.loopBodyNoInits rest = true := by
   simp only [Block.loopBodyNoInits, Bool.and_eq_true]
 
-theorem Stmt.loopBodyNoInits_branch_then
+theorem Stmt.loopBodyNoInits_branch_then [HasFvars P]
     {g : ExprOrNondet P} {tss ess : List (Stmt P (Cmd P))} {md : MetaData P} :
     Stmt.loopBodyNoInits (.ite g tss ess md) = true →
     Block.loopBodyNoInits tss = true := by
   simp only [Stmt.loopBodyNoInits, Bool.and_eq_true]
   intro h; exact h.1
 
-theorem Stmt.loopBodyNoInits_branch_else
+theorem Stmt.loopBodyNoInits_branch_else [HasFvars P]
     {g : ExprOrNondet P} {tss ess : List (Stmt P (Cmd P))} {md : MetaData P} :
     Stmt.loopBodyNoInits (.ite g tss ess md) = true →
     Block.loopBodyNoInits ess = true := by
   simp only [Stmt.loopBodyNoInits, Bool.and_eq_true]
   intro h; exact h.2
 
-theorem Stmt.loopBodyNoInits_block_body
+theorem Stmt.loopBodyNoInits_block_body [HasFvars P]
     {label : String} {body : List (Stmt P (Cmd P))} {md : MetaData P} :
     Stmt.loopBodyNoInits (.block label body md) = true →
     Block.loopBodyNoInits body = true := by
@@ -295,7 +306,7 @@ theorem Stmt.loopBodyNoInits_block_body
   intro h; exact h
 
 /-- A loop's body has no local variable initializations. -/
-theorem Stmt.loopBodyNoInits_loop_body
+theorem Stmt.loopBodyNoInits_loop_body [HasFvars P]
     {g : ExprOrNondet P} {m : Option P.Expr}
     {is : List (String × P.Expr)} {body : List (Stmt P (Cmd P))}
     {md : MetaData P} :
@@ -305,7 +316,7 @@ theorem Stmt.loopBodyNoInits_loop_body
   intro h; exact h.1
 
 /-- The recursive `loopBodyNoInits` discharge for a loop's body. -/
-theorem Stmt.loopBodyNoInits_loop_body_rec
+theorem Stmt.loopBodyNoInits_loop_body_rec [HasFvars P]
     {g : ExprOrNondet P} {m : Option P.Expr}
     {is : List (String × P.Expr)} {body : List (Stmt P (Cmd P))}
     {md : MetaData P} :
@@ -408,19 +419,19 @@ proofs can `rw` against them without unfolding the whole mutual block. -/
 
 /-- Nil-decomposition of `Block.initVars` (definitional; complements the
 `_cons`/`_block`/`_ite`/`_loop` structural equations). -/
-@[simp] theorem Block.initVars_nil {P : PureExpr} :
+@[simp] theorem Block.initVars_nil {P : PureExpr} [HasFvars P] :
     Block.initVars ([] : List (Stmt P (Cmd P))) = [] := by
   simp [Block.initVars]
 
 /-- Cons-decomposition of `Block.initVars`. -/
-@[simp] theorem Block.initVars_cons {P : PureExpr}
+@[simp] theorem Block.initVars_cons {P : PureExpr} [HasFvars P]
     (s : Stmt P (Cmd P)) (ss : List (Stmt P (Cmd P))) :
     Block.initVars (s :: ss) =
       Stmt.initVars s ++ Block.initVars ss := by
   simp [Block.initVars]
 
 /-- `Stmt.initVars` on `.loop` is its body's deep init list. -/
-@[simp] theorem Stmt.initVars_loop {P : PureExpr}
+@[simp] theorem Stmt.initVars_loop {P : PureExpr} [HasFvars P]
     (g : ExprOrNondet P) (m : Option P.Expr)
     (inv : List (String × P.Expr))
     (body : List (Stmt P (Cmd P))) (md : MetaData P) :
@@ -429,7 +440,7 @@ proofs can `rw` against them without unfolding the whole mutual block. -/
   simp [Stmt.initVars]
 
 /-- `Stmt.initVars` on `.block` is its body's deep init list. -/
-@[simp] theorem Stmt.initVars_block {P : PureExpr}
+@[simp] theorem Stmt.initVars_block {P : PureExpr} [HasFvars P]
     (lbl : String) (ss : List (Stmt P (Cmd P))) (md : MetaData P) :
     Stmt.initVars (.block lbl ss md) =
       Block.initVars ss := by
@@ -437,7 +448,7 @@ proofs can `rw` against them without unfolding the whole mutual block. -/
 
 /-- `Stmt.initVars` on `.ite` is the concatenation of both branches' deep
 init lists. -/
-@[simp] theorem Stmt.initVars_ite {P : PureExpr}
+@[simp] theorem Stmt.initVars_ite {P : PureExpr} [HasFvars P]
     (c : ExprOrNondet P) (tss ess : List (Stmt P (Cmd P)))
     (md : MetaData P) :
     Stmt.initVars (.ite c tss ess md) =
@@ -622,25 +633,25 @@ theorem Block.getBlockLabels_map_cmd {P : PureExpr} {C : Type}
 /-! ### Distribution of Block-level shape predicates over `++`
 
 These syntactic lemmas distribute the structural walkers (`initVars`,
-`simpleShape`, `loopHasNoInvariants`, `modifiedVars`, `noInitsAnywhere`,
+`noNondetGuards`, `loopHasNoInvariants`, `modifiedVars`, `noInitsAnywhere`,
 `loopBodyNoInits`) over list concatenation. They are consumed by the
 transform correctness proofs, which all import this base module. -/
 
 /-- Concatenation distributes over `Block.initVars`. -/
-theorem Block.initVars_append (xs ys : List (Stmt P (Cmd P))) :
+theorem Block.initVars_append [HasFvars P] (xs ys : List (Stmt P (Cmd P))) :
     Block.initVars (xs ++ ys) = Block.initVars xs ++ Block.initVars ys := by
   induction xs with
   | nil => simp [Block.initVars]
   | cons x rest ih =>
     simp [ih, List.append_assoc]
 
-/-- `Block.simpleShape` distributes over `++`. -/
-theorem Block.simpleShape_append (xs ys : List (Stmt P (Cmd P))) :
-    Block.simpleShape (xs ++ ys) =
-      (Block.simpleShape xs && Block.simpleShape ys) := by
+/-- `Block.noNondetGuards` distributes over `++`. -/
+theorem Block.noNondetGuards_append (xs ys : List (Stmt P (Cmd P))) :
+    Block.noNondetGuards (xs ++ ys) =
+      (Block.noNondetGuards xs && Block.noNondetGuards ys) := by
   induction xs with
-  | nil => simp [Block.simpleShape]
-  | cons x rest ih => simp [Block.simpleShape, ih, Bool.and_assoc]
+  | nil => simp [Block.noNondetGuards]
+  | cons x rest ih => simp [Block.noNondetGuards, ih, Bool.and_assoc]
 
 /-- `Block.loopHasNoInvariants` distributes over `++`. -/
 theorem Block.loopHasNoInvariants_append (xs ys : List (Stmt P (Cmd P))) :
@@ -651,7 +662,7 @@ theorem Block.loopHasNoInvariants_append (xs ys : List (Stmt P (Cmd P))) :
   | cons x rest ih => simp [Block.loopHasNoInvariants, ih, Bool.and_assoc]
 
 /-- `Block.modifiedVars` distributes over list append. -/
-theorem Block.modifiedVars_append (xs ys : List (Stmt P (Cmd P))) :
+theorem Block.modifiedVars_append [HasFvars P] (xs ys : List (Stmt P (Cmd P))) :
     Block.modifiedVars (xs ++ ys) = Block.modifiedVars xs ++ Block.modifiedVars ys := by
   induction xs with
   | nil => simp [Block.modifiedVars]
@@ -668,7 +679,7 @@ theorem Block.noInitsAnywhere_append (xs ys : List (Stmt P (Cmd P))) :
     simp [Block.noInitsAnywhere, ih, Bool.and_assoc]
 
 /-- Concatenation distributes over `Block.loopBodyNoInits`. -/
-theorem Block.loopBodyNoInits_append (xs ys : List (Stmt P (Cmd P))) :
+theorem Block.loopBodyNoInits_append [HasFvars P] (xs ys : List (Stmt P (Cmd P))) :
     Block.loopBodyNoInits (xs ++ ys) =
       (Block.loopBodyNoInits xs && Block.loopBodyNoInits ys) := by
   induction xs with
@@ -691,6 +702,40 @@ theorem Block.noFuncDecl_append (xs ys : List (Stmt P C)) :
   induction xs with
   | nil => simp [Block.noFuncDecl]
   | cons x rest ih => simp [Block.noFuncDecl, ih, Bool.and_assoc]
+
+/-- `Block.definedVars` distributes over `++`. -/
+theorem Block.definedVars_append [HasVarsImp P C] (xs ys : List (Stmt P C))
+    (excludeScoped : Bool) :
+    Block.definedVars (xs ++ ys) excludeScoped =
+      Block.definedVars xs excludeScoped ++ Block.definedVars ys excludeScoped := by
+  induction xs with
+  | nil => simp [Block.definedVars]
+  | cons x rest ih =>
+    simp only [List.cons_append, Block.definedVars, ih, List.append_assoc]
+
+/-- `Block.funcDeclNames` distributes over `++`. -/
+theorem Block.funcDeclNames_append (xs ys : List (Stmt P C)) (excludeScoped : Bool) :
+    Block.funcDeclNames (xs ++ ys) excludeScoped =
+      Block.funcDeclNames xs excludeScoped ++ Block.funcDeclNames ys excludeScoped := by
+  induction xs with
+  | nil => simp [Block.funcDeclNames]
+  | cons x rest ih =>
+    simp only [List.cons_append, Block.funcDeclNames, ih, List.append_assoc]
+
+/-- `Block.defUseWellFormed` holds of a prefix whenever it holds of the whole
+    concatenation.  Only the prefix direction: the suffix was checked against the
+    *extended* defined/declared predicates, not the ones given here, so it does not
+    follow at the same predicates. -/
+theorem Block.defUseWellFormed_of_append_left [HasVarsImp P C] [HasFvars P] [HasOps P]
+    [HasOpsImp P C] [DecidableEq P.Ident]
+    {definedVars declaredFuncs : P.Ident → Bool} {xs ys : List (Stmt P C)}
+    (h : Block.defUseWellFormed definedVars declaredFuncs (xs ++ ys) = true) :
+    Block.defUseWellFormed definedVars declaredFuncs xs = true := by
+  induction xs generalizing definedVars declaredFuncs with
+  | nil => rfl
+  | cons x rest ih =>
+    simp only [List.cons_append, Block.defUseWellFormed, Bool.and_eq_true] at h ⊢
+    exact ⟨h.1, ih h.2⟩
 
 mutual
 /-- `Stmt.mapExpr` preserves `noFuncDecl`: it recurses structurally and passes
@@ -733,11 +778,14 @@ theorem Block.noFuncDecl_mapExpr
   termination_by sizeOf ss
 end
 
-/-- If `y ∉ Block.definedVars ss`, then `y ∉ Stmt.definedVars s` for `s ∈ ss`. -/
-theorem all_not_mem_definedVars_of_block [HasIdent P] [HasVarsPure P P.Expr]
-    {y : P.Ident} {ss : List (Stmt P (Cmd P))}
-    (h : y ∉ Block.definedVars (P := P) (C := Cmd P) ss false) :
-    ∀ s ∈ ss, y ∉ Stmt.definedVars (P := P) (C := Cmd P) s false := by
+/-- A name a statement list does not define is defined by none of its members, for any
+    command type and at either setting of `excludeScoped` — the two sides are read at the
+    same setting, so whichever notion of "defines" is meant, it transfers. -/
+theorem all_not_mem_definedVars_of_block [HasIdent P] [HasFvars P]
+    {C : Type} [HasVarsImp P C]
+    {y : P.Ident} {ss : List (Stmt P C)} {excludeScoped : Bool}
+    (h : y ∉ Block.definedVars (P := P) (C := C) ss excludeScoped) :
+    ∀ s ∈ ss, y ∉ Stmt.definedVars (P := P) (C := C) s excludeScoped := by
   induction ss with
   | nil => intro s hs; exact absurd hs (List.not_mem_nil)
   | cons s rest ih =>
@@ -747,45 +795,320 @@ theorem all_not_mem_definedVars_of_block [HasIdent P] [HasVarsPure P P.Expr]
     · exact h_eq ▸ (fun hc => h (List.mem_append.mpr (Or.inl hc)))
     · exact ih (fun hc => h (List.mem_append.mpr (Or.inr hc))) s' h_in
 
+/-! ## `defUseWellFormed` implies flat read/write definedness
+
+`Stmt.defUseWellFormed` is *flow-sensitive*: it walks a statement threading an
+accumulating set of defined names, so a name read at one point need only be
+defined by then.  `Stmt.touchedVars` / `Stmt.definedVars` are *flat*: they
+collect the whole statement's reads, writes and definitions with no regard for
+order.
+
+`Stmt.defined_of_mem_touchedVars` below relates the two: every name a statement touches
+but never itself defines must already be defined at entry.  That is what lets a flat
+well-formedness condition be *lowered* from a statement list to one of its members, since
+the condition on the list exempts names the member's *siblings* define and the condition
+on the member alone does not.
+
+The `h_flag` hypothesis says commands have no nested scopes, so their `definedVars` is the
+same at either setting of `excludeScoped`. -/
+
+section DefUse
+
+variable [HasFvars P] [HasVarsImp P C] [HasOps P] [HasOpsImp P C] [DecidableEq P.Ident]
+
+/-- Shape of the `h_flag` side condition of the lemmas below: a command's
+    scope-excluding definitions are among all of its definitions. -/
+@[expose] def CmdDefinedVarsFlagIrrelevant (P : PureExpr) (C : Type) [HasVarsImp P C] : Prop :=
+  ∀ (c : C) (m : P.Ident),
+    m ∈ HasVarsImp.definedVars (P := P) c true → m ∈ HasVarsImp.definedVars (P := P) c false
+
+omit [HasFvars P] [HasOps P] [HasOpsImp P C] [DecidableEq P.Ident] in
+/-- A statement's scope-excluding definitions are among all its definitions.
+    Non-recursive: every compound statement has `definedVars _ true = []`, so
+    only the command case has content, and that case is `h_flag`. -/
+theorem Stmt.definedVars_true_subset_false
+    (h_flag : CmdDefinedVarsFlagIrrelevant P C) {s : Stmt P C} {n : P.Ident}
+    (hn : n ∈ Stmt.definedVars (P := P) (C := C) s true) :
+    n ∈ Stmt.definedVars (P := P) (C := C) s false := by
+  match s with
+  | .cmd c =>
+    simp only [Stmt.definedVars] at hn ⊢
+    exact h_flag c n hn
+  | .block .. | .ite .. | .loop .. | .exit .. | .funcDecl .. | .typeDecl .. =>
+    simp [Stmt.definedVars] at hn
+
+omit [HasFvars P] [HasOps P] [HasOpsImp P C] [DecidableEq P.Ident] in
+/-- A statement list's top-level definitions (`definedVars _ true`) are among all of
+    its definitions (`definedVars _ false`). -/
+theorem Block.definedVars_true_subset_false
+    (h_flag : CmdDefinedVarsFlagIrrelevant P C) {ss : Block P C} {n : P.Ident}
+    (hn : n ∈ Block.definedVars (P := P) (C := C) ss true) :
+    n ∈ Block.definedVars (P := P) (C := C) ss false := by
+  induction ss with
+  | nil => simp [Block.definedVars] at hn
+  | cons s rest ih =>
+    rw [Block.definedVars] at hn ⊢
+    rcases List.mem_append.mp hn with h | h
+    · exact List.mem_append.mpr (Or.inl (Stmt.definedVars_true_subset_false h_flag h))
+    · exact List.mem_append.mpr (Or.inr (ih h))
+
 mutual
-/-- A simple-shape statement contains no nondeterministic loop. -/
-theorem Stmt.not_containsNondetLoop_of_simpleShape {P : PureExpr}
-    (s : Stmt P (Cmd P)) (h : Stmt.simpleShape s = true) :
+
+/-- A name a statement reads or writes, but never defines, is defined at entry.
+    The `modifiedVars ++ getVars` core of `Stmt.defined_of_mem_touchedVars`. -/
+private theorem Stmt.defined_of_mem_modifiedVars_getVars
+    (h_flag : CmdDefinedVarsFlagIrrelevant P C)
+    {defined declared : P.Ident → Bool} {s : Stmt P C} {n : P.Ident}
+    (h : Stmt.defUseWellFormed defined declared s = true)
+    (hn : n ∈ Stmt.modifiedVars (P := P) (C := C) s ++ Stmt.getVars (P := P) (C := C) s)
+    (hnd : n ∉ Stmt.definedVars (P := P) (C := C) s false) :
+    defined n = true := by
+  match s with
+  | .cmd c =>
+    -- Both `readVars` and `modifiedVars` are checked against `defined`.
+    simp only [Stmt.defUseWellFormed, Bool.and_eq_true, List.all_eq_true] at h
+    simp only [Stmt.modifiedVars, Stmt.getVars] at hn
+    rcases List.mem_append.mp hn with hm | hr
+    · exact h.1.1.2 _ hm
+    · exact h.1.1.1 _ hr
+  | .block l bss md =>
+    simp only [Stmt.defUseWellFormed] at h
+    simp only [Stmt.modifiedVars, Stmt.getVars] at hn
+    simp only [Stmt.definedVars, Bool.false_eq_true, if_false] at hnd
+    exact Block.defined_of_mem_modifiedVars_getVars h_flag h hn hnd
+  | .ite cond tbss ebss md =>
+    simp only [Stmt.defUseWellFormed, Bool.and_eq_true, List.all_eq_true] at h
+    simp only [Stmt.modifiedVars, Stmt.getVars] at hn
+    simp only [Stmt.definedVars, Bool.false_eq_true, if_false] at hnd
+    have hnd_t : n ∉ Block.definedVars (P := P) (C := C) tbss false :=
+      fun hc => hnd (List.mem_append.mpr (Or.inl hc))
+    have hnd_e : n ∉ Block.definedVars (P := P) (C := C) ebss false :=
+      fun hc => hnd (List.mem_append.mpr (Or.inr hc))
+    have ht : ∀ (_ : n ∈ Block.modifiedVars (P := P) (C := C) tbss ++
+        Block.getVars (P := P) (C := C) tbss), defined n = true :=
+      fun hx => Block.defined_of_mem_modifiedVars_getVars h_flag h.1.2 hx hnd_t
+    have he : ∀ (_ : n ∈ Block.modifiedVars (P := P) (C := C) ebss ++
+        Block.getVars (P := P) (C := C) ebss), defined n = true :=
+      fun hx => Block.defined_of_mem_modifiedVars_getVars h_flag h.2 hx hnd_e
+    rcases List.mem_append.mp hn with hmod | hread
+    · rcases List.mem_append.mp hmod with hm | hm
+      · exact ht (List.mem_append.mpr (Or.inl hm))
+      · exact he (List.mem_append.mpr (Or.inl hm))
+    · rcases List.mem_append.mp hread with hgt | he_read
+      · rcases List.mem_append.mp hgt with hg | ht_read
+        · exact h.1.1.1 _ hg
+        · exact ht (List.mem_append.mpr (Or.inr ht_read))
+      · exact he (List.mem_append.mpr (Or.inr he_read))
+  | .loop guard measure invariants bss md =>
+    simp only [Stmt.defUseWellFormed, Bool.and_eq_true, List.all_eq_true] at h
+    simp only [Stmt.modifiedVars, Stmt.getVars] at hn
+    simp only [Stmt.definedVars, Bool.false_eq_true, if_false] at hnd
+    have hb : ∀ (_ : n ∈ Block.modifiedVars (P := P) (C := C) bss ++
+        Block.getVars (P := P) (C := C) bss), defined n = true :=
+      fun hx => Block.defined_of_mem_modifiedVars_getVars h_flag h.2 hx hnd
+    rcases List.mem_append.mp hn with hmod | hread
+    · exact hb (List.mem_append.mpr (Or.inl hmod))
+    · rcases List.mem_append.mp hread with hpre | hbody
+      · rcases List.mem_append.mp hpre with hgm | hinv
+        · rcases List.mem_append.mp hgm with hg | hm
+          · exact h.1.1.1.1.1.1 _ hg
+          · exact h.1.1.1.1.2 _ hm
+        · exact h.1.1.2 _ hinv
+      · exact hb (List.mem_append.mpr (Or.inr hbody))
+  | .exit l md =>
+    simp only [Stmt.modifiedVars, Stmt.getVars, List.append_nil, List.not_mem_nil] at hn
+  | .funcDecl decl md =>
+    simp only [Stmt.defUseWellFormed, Bool.and_eq_true, List.all_eq_true] at h
+    simp only [Stmt.modifiedVars, List.nil_append] at hn
+    exact h.1.1.1 _ (by simpa [Stmt.getVars] using hn)
+  | .typeDecl tc md =>
+    simp only [Stmt.modifiedVars, Stmt.getVars, List.append_nil, List.not_mem_nil] at hn
+
+/-- A name a statement *list* reads or writes, but never defines, is defined at
+    entry.  Block-level counterpart of
+    `Stmt.defined_of_mem_modifiedVars_getVars`; the extra work is that a member may
+    be exempted by a *sibling*'s definitions, so the walk has to carry the
+    definitions accumulated so far. -/
+private theorem Block.defined_of_mem_modifiedVars_getVars
+    (h_flag : CmdDefinedVarsFlagIrrelevant P C)
+    {defined declared : P.Ident → Bool} {ss : Block P C} {n : P.Ident}
+    (h : Block.defUseWellFormed defined declared ss = true)
+    (hn : n ∈ Block.modifiedVars (P := P) (C := C) ss ++ Block.getVars (P := P) (C := C) ss)
+    (hnd : n ∉ Block.definedVars (P := P) (C := C) ss false) :
+    defined n = true := by
+  match ss with
+  | [] => simp only [Block.modifiedVars, Block.getVars, List.append_nil, List.not_mem_nil] at hn
+  | s :: rest =>
+    simp only [Block.defUseWellFormed, Bool.and_eq_true] at h
+    simp only [Block.modifiedVars, Block.getVars] at hn
+    rw [Block.definedVars] at hnd
+    have hnd_s : n ∉ Stmt.definedVars (P := P) (C := C) s false :=
+      fun hc => hnd (List.mem_append.mpr (Or.inl hc))
+    have hnd_r : n ∉ Block.definedVars (P := P) (C := C) rest false :=
+      fun hc => hnd (List.mem_append.mpr (Or.inr hc))
+    -- The tail is checked against `defined` extended by the head's *top-level*
+    -- definitions.  `n` is not one of those, so the extension is inert on `n`.
+    have h_tail : ∀ (_ : n ∈ Block.modifiedVars (P := P) (C := C) rest ++
+        Block.getVars (P := P) (C := C) rest), defined n = true := by
+      intro hrest
+      have h_ext := Block.defined_of_mem_modifiedVars_getVars h_flag h.2 hrest hnd_r
+      have h_dec : decide (n ∈ Stmt.definedVars (P := P) (C := C) s true) = false := by
+        simp only [decide_eq_false_iff_not]
+        exact fun hc => hnd_s (Stmt.definedVars_true_subset_false h_flag hc)
+      simp only [h_dec, Bool.or_false] at h_ext
+      exact h_ext
+    have h_head : ∀ (_ : n ∈ Stmt.modifiedVars (P := P) (C := C) s ++
+        Stmt.getVars (P := P) (C := C) s), defined n = true :=
+      fun hx => Stmt.defined_of_mem_modifiedVars_getVars h_flag h.1 hx hnd_s
+    rcases List.mem_append.mp hn with hmod | hread
+    · rcases List.mem_append.mp hmod with hm | hm
+      · exact h_head (List.mem_append.mpr (Or.inl hm))
+      · exact h_tail (List.mem_append.mpr (Or.inl hm))
+    · rcases List.mem_append.mp hread with hr | hr
+      · exact h_head (List.mem_append.mpr (Or.inr hr))
+      · exact h_tail (List.mem_append.mpr (Or.inr hr))
+
+end
+
+mutual
+
+/-- **`defUseWellFormed` implies freshness of everything it defines.**  A name a
+    statement defines anywhere inside it must be *undefined* at entry: each `init`
+    is checked for freshness against the definedness predicate accumulated so far,
+    which always includes the entry predicate.
+
+    Applied to a *tail* `ss` of a statement list, whose accumulated predicate is
+    `defined ∪ Stmt.definedVars s true` for the preceding head `s`, this yields
+    both `defined n = false` and `n ∉ Stmt.definedVars s true` at once — which is
+    exactly what re-establishing a block-level gate on `ss` after running `s`
+    needs (see `Core.Logic.blockInitEnvWF_cons_tail`). -/
+theorem Stmt.not_defined_of_mem_definedVars
+    {defined declared : P.Ident → Bool} {s : Stmt P C} {n : P.Ident}
+    (h : Stmt.defUseWellFormed defined declared s = true)
+    (hn : n ∈ Stmt.definedVars (P := P) (C := C) s false) :
+    defined n = false := by
+  match s with
+  | .cmd c =>
+    simp only [Stmt.defUseWellFormed, Bool.and_eq_true, List.all_eq_true,
+      decide_eq_true_eq, Bool.not_eq_true] at h
+    simp only [Stmt.definedVars] at hn
+    exact h.1.2 _ hn
+  | .block l bss md =>
+    simp only [Stmt.defUseWellFormed] at h
+    simp only [Stmt.definedVars, Bool.false_eq_true, if_false] at hn
+    exact Block.not_defined_of_mem_definedVars h hn
+  | .ite cond tbss ebss md =>
+    simp only [Stmt.defUseWellFormed, Bool.and_eq_true] at h
+    simp only [Stmt.definedVars, Bool.false_eq_true, if_false] at hn
+    rcases List.mem_append.mp hn with ht | he
+    · exact Block.not_defined_of_mem_definedVars h.1.2 ht
+    · exact Block.not_defined_of_mem_definedVars h.2 he
+  | .loop guard measure invariants bss md =>
+    simp only [Stmt.defUseWellFormed, Bool.and_eq_true] at h
+    simp only [Stmt.definedVars, Bool.false_eq_true, if_false] at hn
+    exact Block.not_defined_of_mem_definedVars h.2 hn
+  | .exit l md => simp only [Stmt.definedVars, List.not_mem_nil] at hn
+  | .funcDecl decl md => simp only [Stmt.definedVars, List.not_mem_nil] at hn
+  | .typeDecl tc md => simp only [Stmt.definedVars, List.not_mem_nil] at hn
+
+/-- A name a statement *list* defines is undefined at entry: `defUseWellFormed`
+    requires each `init` to introduce a fresh name.  Block-level counterpart of
+    `Stmt.not_defined_of_mem_definedVars`. -/
+theorem Block.not_defined_of_mem_definedVars
+    {defined declared : P.Ident → Bool} {ss : Block P C} {n : P.Ident}
+    (h : Block.defUseWellFormed defined declared ss = true)
+    (hn : n ∈ Block.definedVars (P := P) (C := C) ss false) :
+    defined n = false := by
+  match ss with
+  | [] => simp only [Block.definedVars, List.not_mem_nil] at hn
+  | s :: rest =>
+    simp only [Block.defUseWellFormed, Bool.and_eq_true] at h
+    rw [Block.definedVars] at hn
+    rcases List.mem_append.mp hn with hs | hr
+    · exact Stmt.not_defined_of_mem_definedVars h.1 hs
+    · have h_ext := Block.not_defined_of_mem_definedVars h.2 hr
+      simpa using (Bool.or_eq_false_iff.mp h_ext).1
+
+end
+
+/-- **`defUseWellFormed` implies `readWritesDefined`.**  Every name a statement
+    touches but does not itself define is already defined at entry. -/
+theorem Stmt.defined_of_mem_touchedVars
+    (h_flag : CmdDefinedVarsFlagIrrelevant P C)
+    {defined declared : P.Ident → Bool} {s : Stmt P C} {n : P.Ident}
+    (h : Stmt.defUseWellFormed defined declared s = true)
+    (hn : n ∈ Stmt.touchedVars (P := P) (C := C) s)
+    (hnd : n ∉ Stmt.definedVars (P := P) (C := C) s false) :
+    defined n = true := by
+  simp only [Stmt.touchedVars, Stmt.modifiedOrDefinedVars] at hn
+  rcases List.mem_append.mp hn with hmod | hread
+  · rcases List.mem_append.mp hmod with hm | hd
+    · exact Stmt.defined_of_mem_modifiedVars_getVars h_flag h
+        (List.mem_append.mpr (Or.inl hm)) hnd
+    · exact absurd (Stmt.definedVars_true_subset_false h_flag hd) hnd
+  · exact Stmt.defined_of_mem_modifiedVars_getVars h_flag h
+      (List.mem_append.mpr (Or.inr hread)) hnd
+
+/-- Every name a statement list touches but does not itself define is already
+    defined at entry — the block-level consequence of the flow-sensitive
+    `defUseWellFormed`. -/
+theorem Block.defined_of_mem_touchedVars
+    (h_flag : CmdDefinedVarsFlagIrrelevant P C)
+    {defined declared : P.Ident → Bool} {ss : Block P C} {n : P.Ident}
+    (h : Block.defUseWellFormed defined declared ss = true)
+    (hn : n ∈ Block.touchedVars (P := P) (C := C) ss)
+    (hnd : n ∉ Block.definedVars (P := P) (C := C) ss false) :
+    defined n = true := by
+  simp only [Block.touchedVars, Block.modifiedOrDefinedVars] at hn
+  rcases List.mem_append.mp hn with hmod | hread
+  · rcases List.mem_append.mp hmod with hm | hd
+    · exact Block.defined_of_mem_modifiedVars_getVars h_flag h
+        (List.mem_append.mpr (Or.inl hm)) hnd
+    · exact absurd (Block.definedVars_true_subset_false h_flag hd) hnd
+  · exact Block.defined_of_mem_modifiedVars_getVars h_flag h
+      (List.mem_append.mpr (Or.inr hread)) hnd
+
+end DefUse
+
+mutual
+/-- A statement free of nondeterministic guards contains no nondeterministic loop. -/
+theorem Stmt.not_containsNondetLoop_of_noNondetGuards {P : PureExpr}
+    (s : Stmt P (Cmd P)) (h : Stmt.noNondetGuards s = true) :
     Stmt.containsNondetLoop s = false := by
   match s with
   | .cmd c => rw [Stmt.containsNondetLoop]
   | .block lbl bss md =>
       rw [Stmt.containsNondetLoop]
-      rw [Stmt.simpleShape] at h
-      exact Block.not_containsNondetLoop_of_simpleShape bss h
+      rw [Stmt.noNondetGuards] at h
+      exact Block.not_containsNondetLoop_of_noNondetGuards bss h
   | .ite (.det e) tss ess md =>
       rw [Stmt.containsNondetLoop, Bool.or_eq_false_iff]
-      rw [Stmt.simpleShape, Bool.and_eq_true] at h
-      exact ⟨Block.not_containsNondetLoop_of_simpleShape tss h.1,
-             Block.not_containsNondetLoop_of_simpleShape ess h.2⟩
-  | .ite .nondet tss ess md => rw [Stmt.simpleShape] at h; exact absurd h (by simp)
+      rw [Stmt.noNondetGuards, Bool.and_eq_true] at h
+      exact ⟨Block.not_containsNondetLoop_of_noNondetGuards tss h.1,
+             Block.not_containsNondetLoop_of_noNondetGuards ess h.2⟩
+  | .ite .nondet tss ess md => rw [Stmt.noNondetGuards] at h; exact absurd h (by simp)
   | .loop (.det e) m inv body md =>
       rw [Stmt.containsNondetLoop]
-      rw [Stmt.simpleShape, Bool.and_eq_true] at h
-      exact Block.not_containsNondetLoop_of_simpleShape body h.2
+      rw [Stmt.noNondetGuards, Bool.and_eq_true] at h
+      exact Block.not_containsNondetLoop_of_noNondetGuards body h.2
   | .loop .nondet m inv body md =>
-      rw [Stmt.simpleShape] at h; exact absurd h (by simp)
+      rw [Stmt.noNondetGuards] at h; exact absurd h (by simp)
   | .exit lbl md => rw [Stmt.containsNondetLoop]
   | .funcDecl d md => rw [Stmt.containsNondetLoop]
   | .typeDecl t md => rw [Stmt.containsNondetLoop]
   termination_by sizeOf s
 
-/-- A simple-shape block contains no nondeterministic loop. -/
-theorem Block.not_containsNondetLoop_of_simpleShape {P : PureExpr}
-    (ss : List (Stmt P (Cmd P))) (h : Block.simpleShape ss = true) :
+/-- A block free of nondeterministic guards contains no nondeterministic loop. -/
+theorem Block.not_containsNondetLoop_of_noNondetGuards {P : PureExpr}
+    (ss : List (Stmt P (Cmd P))) (h : Block.noNondetGuards ss = true) :
     Block.containsNondetLoop ss = false := by
   match ss with
   | [] => rw [Block.containsNondetLoop]
   | s :: rest =>
       rw [Block.containsNondetLoop, Bool.or_eq_false_iff]
-      rw [Block.simpleShape, Bool.and_eq_true] at h
-      exact ⟨Stmt.not_containsNondetLoop_of_simpleShape s h.1,
-             Block.not_containsNondetLoop_of_simpleShape rest h.2⟩
+      rw [Block.noNondetGuards, Bool.and_eq_true] at h
+      exact ⟨Stmt.not_containsNondetLoop_of_noNondetGuards s h.1,
+             Block.not_containsNondetLoop_of_noNondetGuards rest h.2⟩
   termination_by sizeOf ss
 end
 
@@ -1023,21 +1346,21 @@ theorem Block.userLabel_of_block_head {P : PureExpr}
 list. These mechanical helpers project Nodup down to sub-lists that recursive
 simulation calls produce. -/
 
-theorem Block.uniqueInits.tail {P : PureExpr}
+theorem Block.uniqueInits.tail {P : PureExpr} [HasFvars P]
     {s : Stmt P (Cmd P)} {ss : List (Stmt P (Cmd P))}
     (h : Block.uniqueInits (s :: ss)) : Block.uniqueInits ss := by
   unfold Block.uniqueInits at h ⊢
   rw [Block.initVars_cons] at h
   exact (List.nodup_append.mp h).2.1
 
-theorem Block.uniqueInits.head_stmt {P : PureExpr}
+theorem Block.uniqueInits.head_stmt {P : PureExpr} [HasFvars P]
     {s : Stmt P (Cmd P)} {ss : List (Stmt P (Cmd P))}
     (h : Block.uniqueInits (s :: ss)) : (Stmt.initVars s).Nodup := by
   unfold Block.uniqueInits at h
   rw [Block.initVars_cons] at h
   exact (List.nodup_append.mp h).1
 
-theorem Block.uniqueInits.block_body {P : PureExpr}
+theorem Block.uniqueInits.block_body {P : PureExpr} [HasFvars P]
     {label : String} {bss : List (Stmt P (Cmd P))} {md : MetaData P}
     {rest : List (Stmt P (Cmd P))}
     (h : Block.uniqueInits (.block label bss md :: rest)) :
@@ -1047,7 +1370,7 @@ theorem Block.uniqueInits.block_body {P : PureExpr}
   rw [Stmt.initVars_block] at h_head
   exact h_head
 
-theorem Block.uniqueInits.ite_then {P : PureExpr}
+theorem Block.uniqueInits.ite_then {P : PureExpr} [HasFvars P]
     {g : ExprOrNondet P} {tss ess : List (Stmt P (Cmd P))} {md : MetaData P}
     {rest : List (Stmt P (Cmd P))}
     (h : Block.uniqueInits (.ite g tss ess md :: rest)) :
@@ -1057,7 +1380,7 @@ theorem Block.uniqueInits.ite_then {P : PureExpr}
   rw [Stmt.initVars_ite] at h_head
   exact (List.nodup_append.mp h_head).1
 
-theorem Block.uniqueInits.ite_else {P : PureExpr}
+theorem Block.uniqueInits.ite_else {P : PureExpr} [HasFvars P]
     {g : ExprOrNondet P} {tss ess : List (Stmt P (Cmd P))} {md : MetaData P}
     {rest : List (Stmt P (Cmd P))}
     (h : Block.uniqueInits (.ite g tss ess md :: rest)) :
@@ -1068,20 +1391,20 @@ theorem Block.uniqueInits.ite_else {P : PureExpr}
 
 /-! ## `loopBodyNoInits` peel helpers. -/
 
-theorem initfree_cons {P : PureExpr}
+theorem initfree_cons {P : PureExpr} [HasFvars P]
     {s : Stmt P (Cmd P)} {rest : List (Stmt P (Cmd P))}
     (h : Block.loopBodyNoInits (s :: rest) = true) :
     Stmt.loopBodyNoInits s = true ∧ Block.loopBodyNoInits rest = true := by
   simp only [Block.loopBodyNoInits, Bool.and_eq_true] at h
   exact h
 
-theorem initfree_block {P : PureExpr}
+theorem initfree_block {P : PureExpr} [HasFvars P]
     {lbl : String} {bss : List (Stmt P (Cmd P))} {md : MetaData P}
     (h : Stmt.loopBodyNoInits (.block lbl bss md) = true) :
     Block.loopBodyNoInits bss = true := by
   simpa [Stmt.loopBodyNoInits] using h
 
-theorem initfree_ite {P : PureExpr}
+theorem initfree_ite {P : PureExpr} [HasFvars P]
     {g : ExprOrNondet P} {tss ess : List (Stmt P (Cmd P))} {md : MetaData P}
     (h : Stmt.loopBodyNoInits (.ite g tss ess md) = true) :
     Block.loopBodyNoInits tss = true ∧ Block.loopBodyNoInits ess = true := by
@@ -1108,7 +1431,7 @@ theorem Block.transportShape_append {P : PureExpr} (xs ys : List (Stmt P (Cmd P)
 
 mutual
 /-- An init-free, funcDecl-free statement defines no variables. -/
-theorem stmt_definedVars_nil_of_noInits_noFuncDecl {P : PureExpr} (s : Stmt P (Cmd P))
+theorem stmt_definedVars_nil_of_noInits_noFuncDecl {P : PureExpr} [HasFvars P] (s : Stmt P (Cmd P))
     (h_ni : Stmt.noInitsAnywhere s = true) (h_nf : Stmt.noFuncDecl s = true) :
     Stmt.definedVars s false = [] := by
   match s with
@@ -1136,7 +1459,7 @@ theorem stmt_definedVars_nil_of_noInits_noFuncDecl {P : PureExpr} (s : Stmt P (C
   | .typeDecl t md => simp
   termination_by sizeOf s
 
-theorem block_definedVars_nil_of_noInits_noFuncDecl {P : PureExpr} (body : List (Stmt P (Cmd P)))
+theorem block_definedVars_nil_of_noInits_noFuncDecl {P : PureExpr} [HasFvars P] (body : List (Stmt P (Cmd P)))
     (h_ni : Block.noInitsAnywhere body = true) (h_nf : Block.noFuncDecl body = true) :
     Block.definedVars body false = [] := by
   match body with
@@ -1235,8 +1558,8 @@ end
 
 Property lemmas over the `namesFreshInExprs`, `namesFreshInRhsExprs`, and
 `exprsShapeFree` predicate families (defined in `Strata.DL.Imperative.Stmt`).
-Each leaf freshness condition is a `List.Disjoint`, so many lemmas reduce to the
-`List.Disjoint` API. -/
+Each leaf freshness condition is a `List.Disj`, so many lemmas reduce to the
+`List.Disj` API. -/
 
 mutual
 
@@ -1249,15 +1572,15 @@ theorem Stmt.namesFreshInRhsExprs_of_namesFreshInExprs {P : PureExpr} [HasFvars 
     Stmt.namesFreshInRhsExprs names s := by
   match s with
   | .cmd (.init _ _ rhs _) => simpa only [Stmt.namesFreshInRhsExprs] using
-      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsPure.getVars, Cmd.getVars] using h)
+      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsImp.readVars, Cmd.getVars] using h)
   | .cmd (.set _ rhs _) => simpa only [Stmt.namesFreshInRhsExprs] using
-      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsPure.getVars, Cmd.getVars] using h)
+      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsImp.readVars, Cmd.getVars] using h)
   | .cmd (.assert _ e _) => simpa only [Stmt.namesFreshInRhsExprs] using
-      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsPure.getVars, Cmd.getVars] using h)
+      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsImp.readVars, Cmd.getVars] using h)
   | .cmd (.assume _ e _) => simpa only [Stmt.namesFreshInRhsExprs] using
-      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsPure.getVars, Cmd.getVars] using h)
+      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsImp.readVars, Cmd.getVars] using h)
   | .cmd (.cover _ e _) => simpa only [Stmt.namesFreshInRhsExprs] using
-      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsPure.getVars, Cmd.getVars] using h)
+      (by simpa only [Stmt.namesFreshInExprs, Stmt.getVars, HasVarsImp.readVars, Cmd.getVars] using h)
   | .block _ bss _ =>
       simp only [Stmt.namesFreshInExprs, Stmt.getVars] at h
       simp only [Stmt.namesFreshInRhsExprs]
@@ -1384,8 +1707,8 @@ end
 
 mutual
 /-- `namesFreshInRhsExprs` over a `cons` name list splits as the head-singleton
-freshness and the tail freshness (each leaf `List.Disjoint (hd :: tl) vars`
-splits as `hd ∉ vars ∧ List.Disjoint tl vars`). -/
+freshness and the tail freshness (each leaf `List.Disj (hd :: tl) vars`
+splits as `hd ∉ vars ∧ List.Disj tl vars`). -/
 theorem Stmt.namesFreshInRhsExprs_cons_names {P : PureExpr}
     [HasFvars P] (hd : P.Ident) (tl : List P.Ident) (s : Stmt P (Cmd P))
     (h_hd : Stmt.namesFreshInRhsExprs (P := P) [hd] s)
@@ -1439,7 +1762,7 @@ theorem Block.namesFreshInRhsExprs_of_forall_mem {P : PureExpr}
 /-- A `.cmd (init _ _ .nondet _)` has an empty-vars RHS, so any names list is
 RHS-fresh in it. -/
 theorem Stmt.namesFreshInRhsExprs_cmd_init_nondet {P : PureExpr}
-    [HasVarsPure P P.Expr] [HasFvars P] (names : List P.Ident) (ident : P.Ident)
+    [HasFvars P] (names : List P.Ident) (ident : P.Ident)
     (ty : P.Ty) (md : MetaData P) :
     Stmt.namesFreshInRhsExprs (P := P) names
       (Stmt.cmd (HasInit.init ident ty ExprOrNondet.nondet md)) := by
@@ -1451,7 +1774,7 @@ theorem Stmt.namesFreshInRhsExprs_cmd_init_nondet {P : PureExpr}
 /-- A `.cmd (havoc _)` has an empty-vars RHS, so any names list is RHS-fresh in
 it. -/
 theorem Stmt.namesFreshInRhsExprs_cmd_havoc {P : PureExpr}
-    [HasVarsPure P P.Expr] [HasFvars P] (names : List P.Ident) (ident : P.Ident)
+    [HasFvars P] (names : List P.Ident) (ident : P.Ident)
     (md : MetaData P) :
     Stmt.namesFreshInRhsExprs (P := P) names
       (Stmt.cmd (HasHavoc.havoc ident md)) := by
@@ -1461,7 +1784,7 @@ theorem Stmt.namesFreshInRhsExprs_cmd_havoc {P : PureExpr}
   intro z _ hz; simp only [List.not_mem_nil] at hz
 
 /-- The empty name list is fresh in every statement's expressions:
-`namesFreshInExprs` is `List.Disjoint [] _`, which holds vacuously. -/
+`namesFreshInExprs` is `List.Disj [] _`, which holds vacuously. -/
 theorem Stmt.namesFreshInExprs_nil {P : PureExpr} [HasFvars P] (s : Stmt P (Cmd P)) :
     Stmt.namesFreshInExprs (P := P) [] s :=
   List.Disjoint_nil_left _
@@ -1476,7 +1799,7 @@ private theorem disjoint_of_shapefree_leaf {P : PureExpr} [HasIdent P]
     {Q : String → Prop} {names : List P.Ident} {vars : List P.Ident}
     (h_names_suffix : ∀ z ∈ names, ∃ str : String, z = HasIdent.ident str ∧ Q str)
     (h_sf : ∀ str : String, Q str → HasIdent.ident (P := P) str ∉ vars) :
-    List.Disjoint names vars := by
+    List.Disj names vars := by
   intro z hz hzv
   obtain ⟨str, h_eq, h_suf⟩ := h_names_suffix z hz
   exact (h_eq ▸ h_sf str h_suf) hzv
@@ -1486,13 +1809,13 @@ private theorem disjoint_of_shapefree_leaf {P : PureExpr} [HasIdent P]
 private theorem Stmt.namesFreshInExprs_of_disjoint_getVars {P : PureExpr}
     [HasIdent P] [HasFvars P] {names : List P.Ident}
     (s : Stmt P (Cmd P))
-    (h : List.Disjoint names (Stmt.getVars s)) :
+    (h : List.Disj names (Stmt.getVars s)) :
     Stmt.namesFreshInExprs names s := h
 
 private theorem Block.namesFreshInExprs_of_disjoint_getVars {P : PureExpr}
     [HasIdent P] [HasFvars P] {names : List P.Ident}
     (ss : List (Stmt P (Cmd P)))
-    (h : List.Disjoint names (Block.getVars ss)) :
+    (h : List.Disj names (Block.getVars ss)) :
     Block.namesFreshInExprs names ss := h
 
 /-- `exprsShapeFree s` plus "every `names` element is a `Q`-kind ident"
@@ -1536,12 +1859,12 @@ These `iff`s recover the per-constructor recursive shape (matching how `getVars`
 distributes over `++`/`flatMap`), so downstream proofs can reason arm-by-arm. -/
 
 theorem Block.exprsShapeFree_nil {P : PureExpr} [HasIdent P] [HasFvars P]
-    [HasVarsPure P (Cmd P)] {Q : String → Prop} :
+    [HasVarsImp P (Cmd P)] {Q : String → Prop} :
     Block.exprsShapeFree (P := P) Q [] := by
   intro str _ hmem; simp only [Block.getVars] at hmem; exact absurd hmem List.not_mem_nil
 
 theorem Block.exprsShapeFree_cons_iff {P : PureExpr} [HasIdent P] [HasFvars P]
-    [HasVarsPure P (Cmd P)] {Q : String → Prop} {s : Stmt P (Cmd P)}
+    [HasVarsImp P (Cmd P)] {Q : String → Prop} {s : Stmt P (Cmd P)}
     {rest : List (Stmt P (Cmd P))} :
     Block.exprsShapeFree (P := P) Q (s :: rest) ↔
       Stmt.exprsShapeFree (P := P) Q s ∧ Block.exprsShapeFree (P := P) Q rest := by
@@ -1556,12 +1879,12 @@ theorem Block.exprsShapeFree_cons_iff {P : PureExpr} [HasIdent P] [HasFvars P]
     · exact h_rest str hQ ht
 
 theorem Block.exprsShapeFree_singleton {P : PureExpr} [HasIdent P] [HasFvars P]
-    [HasVarsPure P (Cmd P)] {Q : String → Prop} {s : Stmt P (Cmd P)} :
+    [HasVarsImp P (Cmd P)] {Q : String → Prop} {s : Stmt P (Cmd P)} :
     Block.exprsShapeFree (P := P) Q [s] ↔ Stmt.exprsShapeFree (P := P) Q s :=
   Block.exprsShapeFree_cons_iff.trans (and_iff_left Block.exprsShapeFree_nil)
 
 /-- `Block.exprsShapeFree Q` distributes over list append. -/
-theorem Block.exprsShapeFree_append {P : PureExpr} [HasIdent P] [HasVarsPure P (Cmd P)] [HasFvars P] {Q : String → Prop}
+theorem Block.exprsShapeFree_append {P : PureExpr} [HasIdent P] [HasVarsImp P (Cmd P)] [HasFvars P] {Q : String → Prop}
     (xs ys : List (Stmt P (Cmd P)))
     (h : Block.exprsShapeFree (P := P) Q xs ∧ Block.exprsShapeFree (P := P) Q ys) :
     Block.exprsShapeFree (P := P) Q (xs ++ ys) := by
@@ -1573,19 +1896,19 @@ theorem Block.exprsShapeFree_append {P : PureExpr} [HasIdent P] [HasVarsPure P (
       exact ⟨h.1.1, ih ⟨h.1.2, h.2⟩⟩
 
 theorem Stmt.exprsShapeFree_cmd {P : PureExpr} [HasIdent P] [HasFvars P]
-    [HasVarsPure P (Cmd P)] {Q : String → Prop} {c : Cmd P} :
+    [HasVarsImp P (Cmd P)] {Q : String → Prop} {c : Cmd P} :
     Stmt.exprsShapeFree (P := P) Q (.cmd c) ↔
       (∀ str : String, Q str → HasIdent.ident (P := P) str ∉ Cmd.getVars c) := by
   constructor
   · intro h str hQ hmem
-    exact h str hQ (by simp only [Stmt.getVars, HasVarsPure.getVars]; exact hmem)
+    exact h str hQ (by simp only [Stmt.getVars, HasVarsImp.readVars]; exact hmem)
   · intro h str hQ hmem
-    simp only [Stmt.getVars, HasVarsPure.getVars] at hmem
+    simp only [Stmt.getVars, HasVarsImp.readVars] at hmem
     exact h str hQ hmem
 
 /-- A `.cmd (init _ _ .nondet _)` reads nothing, so it is `exprsShapeFree`. -/
 theorem Stmt.exprsShapeFree_cmd_init_nondet {P : PureExpr} [HasIdent P]
-    [HasVarsPure P P.Expr] [HasFvars P] {Q : String → Prop} (ident : P.Ident)
+    [HasFvars P] {Q : String → Prop} (ident : P.Ident)
     (ty : P.Ty) (md : MetaData P) :
     Stmt.exprsShapeFree (P := P) Q (Stmt.cmd (HasInit.init ident ty ExprOrNondet.nondet md)) := by
   show Stmt.exprsShapeFree (P := P) Q (Stmt.cmd (Cmd.init ident ty ExprOrNondet.nondet md))
@@ -1595,7 +1918,7 @@ theorem Stmt.exprsShapeFree_cmd_init_nondet {P : PureExpr} [HasIdent P]
 
 /-- A `.cmd (havoc _)` reads nothing, so it is `exprsShapeFree`. -/
 theorem Stmt.exprsShapeFree_cmd_havoc {P : PureExpr} [HasIdent P]
-    [HasVarsPure P P.Expr] [HasFvars P] {Q : String → Prop} (ident : P.Ident)
+    [HasFvars P] {Q : String → Prop} (ident : P.Ident)
     (md : MetaData P) :
     Stmt.exprsShapeFree (P := P) Q (Stmt.cmd (HasHavoc.havoc ident md)) := by
   show Stmt.exprsShapeFree (P := P) Q (Stmt.cmd (Cmd.set ident ExprOrNondet.nondet md))
@@ -1604,7 +1927,7 @@ theorem Stmt.exprsShapeFree_cmd_havoc {P : PureExpr} [HasIdent P]
   exact fun str _ hmem => absurd hmem List.not_mem_nil
 
 theorem Stmt.exprsShapeFree_block {P : PureExpr} [HasIdent P] [HasFvars P]
-    [HasVarsPure P (Cmd P)] {Q : String → Prop} {lbl : String}
+    [HasVarsImp P (Cmd P)] {Q : String → Prop} {lbl : String}
     {bss : List (Stmt P (Cmd P))} {md : MetaData P} :
     Stmt.exprsShapeFree (P := P) Q (.block lbl bss md) ↔ Block.exprsShapeFree (P := P) Q bss := by
   constructor
@@ -1612,7 +1935,7 @@ theorem Stmt.exprsShapeFree_block {P : PureExpr} [HasIdent P] [HasFvars P]
   · intro h str hQ hmem; simp only [Stmt.getVars] at hmem; exact h str hQ hmem
 
 theorem Stmt.exprsShapeFree_ite {P : PureExpr} [HasIdent P] [HasFvars P]
-    [HasVarsPure P (Cmd P)] {Q : String → Prop} {g : ExprOrNondet P}
+    [HasVarsImp P (Cmd P)] {Q : String → Prop} {g : ExprOrNondet P}
     {tss ess : List (Stmt P (Cmd P))} {md : MetaData P} :
     Stmt.exprsShapeFree (P := P) Q (.ite g tss ess md) ↔
       (∀ str : String, Q str → HasIdent.ident (P := P) str ∉ ExprOrNondet.getVars g) ∧
@@ -1631,7 +1954,7 @@ theorem Stmt.exprsShapeFree_ite {P : PureExpr} [HasIdent P] [HasFvars P]
     · exact h_e str hQ h2
 
 theorem Stmt.exprsShapeFree_loop {P : PureExpr} [HasIdent P] [HasFvars P]
-    [HasVarsPure P (Cmd P)] {Q : String → Prop} {g : ExprOrNondet P}
+    [HasVarsImp P (Cmd P)] {Q : String → Prop} {g : ExprOrNondet P}
     {m : Option P.Expr} {inv : List (String × P.Expr)}
     {body : List (Stmt P (Cmd P))} {md : MetaData P} :
     Stmt.exprsShapeFree (P := P) Q (.loop g m inv body md) ↔
@@ -1676,7 +1999,7 @@ theorem block_pred_map_cmd_true {P : PureExpr}
   | cons c rest ih => rw [List.map_cons, hcons, hcmd, ih]; rfl
 
 /-- `Block.initVars` of a `.cmd`-only block is the commands' `definedVars`. -/
-theorem Block.initVars_map_cmd {P : PureExpr} (cs : List (Cmd P)) :
+theorem Block.initVars_map_cmd {P : PureExpr} [HasFvars P] (cs : List (Cmd P)) :
     Block.initVars (cs.map Stmt.cmd) = Cmds.definedVars cs := by
   induction cs with
   | nil => simp [Block.initVars, Cmds.definedVars]
@@ -1704,17 +2027,17 @@ theorem Block.transportShape_map_cmd {P : PureExpr} (cs : List (Cmd P)) :
       | cover _ _ _ => simp [Stmt.transportShape]) cs
 
 /-- A `.cmd`-only block has `loopBodyNoInits`. -/
-theorem Block.loopBodyNoInits_map_cmd' {P : PureExpr} (cs : List (Cmd P)) :
+theorem Block.loopBodyNoInits_map_cmd' {P : PureExpr} [HasFvars P] (cs : List (Cmd P)) :
     Block.loopBodyNoInits (cs.map (Stmt.cmd : Cmd P → Stmt P (Cmd P))) = true :=
   block_pred_map_cmd_true Block.loopBodyNoInits Stmt.loopBodyNoInits
       (by simp [Block.loopBodyNoInits])
     (fun _ _ => by simp [Block.loopBodyNoInits]) (fun _ => by simp [Stmt.loopBodyNoInits]) cs
 
-/-- A `.cmd`-only block has `simpleShape`. -/
-theorem Block.simpleShape_map_cmd' {P : PureExpr} (cs : List (Cmd P)) :
-    Block.simpleShape (cs.map (Stmt.cmd : Cmd P → Stmt P (Cmd P))) = true :=
-  block_pred_map_cmd_true Block.simpleShape Stmt.simpleShape (by simp [Block.simpleShape])
-    (fun _ _ => by simp [Block.simpleShape]) (fun _ => by simp [Stmt.simpleShape]) cs
+/-- A `.cmd`-only block has `noNondetGuards`. -/
+theorem Block.noNondetGuards_map_cmd' {P : PureExpr} (cs : List (Cmd P)) :
+    Block.noNondetGuards (cs.map (Stmt.cmd : Cmd P → Stmt P (Cmd P))) = true :=
+  block_pred_map_cmd_true Block.noNondetGuards Stmt.noNondetGuards (by simp [Block.noNondetGuards])
+    (fun _ _ => by simp [Block.noNondetGuards]) (fun _ => by simp [Stmt.noNondetGuards]) cs
 
 /-- A `.cmd`-only block has `loopHasNoInvariants`. -/
 theorem Block.loopHasNoInvariants_map_cmd' {P : PureExpr} (cs : List (Cmd P)) :
@@ -1731,6 +2054,78 @@ theorem Block.noMeasureLoops_map_cmd' {P : PureExpr} (cs : List (Cmd P)) :
     (by simp [Block.noMeasureLoops])
     (fun _ _ => by simp [Block.noMeasureLoops])
     (fun _ => by simp [Stmt.noMeasureLoops]) cs
+
+/-! ## `mapExprM` at the identity monad computes `mapExpr`
+
+`Stmt.mapExprM`/`Block.mapExprM` (defined in `Strata.DL.Imperative.Stmt`) are the
+monadic generalizations of the pure `Stmt.mapExpr`/`Block.mapExpr`.  Instantiated
+at the identity monad `Id`, they compute exactly their pure counterparts, so any
+reasoning about the pure walkers transfers to the trivial-effect instance of the
+monadic ones (and vice versa):
+
+- `Stmt.mapExpr_eq_mapExprM` — `Stmt.mapExpr f c s = Stmt.mapExprM (M := Id) f c s`.
+- `Block.mapExpr_eq_mapExprM` — the block-level analogue.
+
+The two supporting lemmas `optionMapM_Id`/`listMapM_Id` discharge the
+`Option.mapM`/`List.mapM` sub-traversals over a loop's measure and invariants —
+the only positions where `mapExprM` threads the monad through a container. -/
+
+/-- Monadic mapping over an option in the trivial (identity) monad reduces to
+    pure mapping — the monadic wrapper is a no-op. -/
+private theorem optionMapM_Id {α β : Type _} (g : α → Id β) (o : Option α) :
+    Option.mapM g o = Option.map g o := by
+  cases o <;> rfl
+
+/-- Monadic mapping over a list in the trivial (identity) monad reduces to pure
+    mapping — the monadic wrapper is a no-op. -/
+private theorem listMapM_Id {α β : Type _} (g : α → Id β) (l : List α) :
+    List.mapM g l = List.map g l := by
+  induction l with
+  | nil => rfl
+  | cons a as ih => rw [List.mapM_cons, ih]; rfl
+
+mutual
+/-- `Stmt.mapExprM` at the identity monad `Id` computes the pure `Stmt.mapExpr`:
+    rewriting a statement's expressions with a pure function is the trivial-effect
+    instance of the monadic walker. -/
+theorem Stmt.mapExpr_eq_mapExprM (fExpr : P.Expr → P.Expr) (mapCmd : C → C) (s : Stmt P C) :
+    Stmt.mapExpr fExpr mapCmd s = Stmt.mapExprM (M := Id) fExpr mapCmd s := by
+  match s with
+  | .cmd c => simp only [Stmt.mapExpr, Stmt.mapExprM]; rfl
+  | .block l ss md =>
+      simp only [Stmt.mapExpr, Stmt.mapExprM]
+      rw [Block.mapExpr_eq_mapExprM fExpr mapCmd ss]; rfl
+  | .ite (.det c) tss ess md =>
+      simp only [Stmt.mapExpr, Stmt.mapExprM]
+      rw [Block.mapExpr_eq_mapExprM fExpr mapCmd tss,
+          Block.mapExpr_eq_mapExprM fExpr mapCmd ess]; rfl
+  | .ite .nondet tss ess md =>
+      simp only [Stmt.mapExpr, Stmt.mapExprM]
+      rw [Block.mapExpr_eq_mapExprM fExpr mapCmd tss,
+          Block.mapExpr_eq_mapExprM fExpr mapCmd ess]; rfl
+  | .loop (.det g) measure inv body md =>
+      simp only [Stmt.mapExpr, Stmt.mapExprM]
+      rw [Block.mapExpr_eq_mapExprM fExpr mapCmd body, optionMapM_Id, listMapM_Id]; rfl
+  | .loop .nondet measure inv body md =>
+      simp only [Stmt.mapExpr, Stmt.mapExprM]
+      rw [Block.mapExpr_eq_mapExprM fExpr mapCmd body, optionMapM_Id, listMapM_Id]; rfl
+  | .exit l md => simp only [Stmt.mapExpr, Stmt.mapExprM]; rfl
+  | .funcDecl decl md => simp only [Stmt.mapExpr, Stmt.mapExprM]; rfl
+  | .typeDecl tc md => simp only [Stmt.mapExpr, Stmt.mapExprM]; rfl
+  termination_by sizeOf s
+
+/-- `Block.mapExprM` at the identity monad `Id` computes the pure `Block.mapExpr`:
+    rewriting a block's expressions with a pure function is the trivial-effect
+    instance of the monadic walker. -/
+theorem Block.mapExpr_eq_mapExprM (fExpr : P.Expr → P.Expr) (mapCmd : C → C) (ss : Block P C) :
+    Block.mapExpr fExpr mapCmd ss = Block.mapExprM (M := Id) fExpr mapCmd ss := by
+  match ss with
+  | [] => simp only [Block.mapExpr, Block.mapExprM]; rfl
+  | s :: rest =>
+      simp only [Block.mapExpr, Block.mapExprM]
+      rw [Stmt.mapExpr_eq_mapExprM fExpr mapCmd s, Block.mapExpr_eq_mapExprM fExpr mapCmd rest]; rfl
+  termination_by sizeOf ss
+end
 
 end -- public section
 

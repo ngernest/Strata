@@ -276,6 +276,52 @@ info: "; x\n(declare-const x Real)\n; y\n(declare-const y Real)\n(assert (|/| x 
 
 end ArrayTheory
 
+/-! ## `smtTermToLExpr`: unary `-` decodes by operand type
+
+The model parser represents a unary `-` in a counterexample as a UF
+application whose return type is an untyped placeholder, so `smtTermToLExpr`
+decides `int.neg` vs `real.neg` from the operand, which is expected to be a
+numeric constant: a real constant ⇒ `real.neg`, otherwise `int.neg`. -/
+
+/-- Build the untyped `(- arg)` UF application that a parsed model yields for
+    unary minus. -/
+private def negUF (arg : Strata.SMT.Term) : Strata.SMT.Term :=
+  .app (.core (.uf { id := "-", args := [], out := .constr "_placeholder" [] }))
+    [arg] (.constr "_placeholder" [])
+
+-- Integer constant operand ⇒ `Int.Neg`.
+#guard smtTermToLExpr (negUF (.prim (.int 1)))
+  == .app () (.op () "Int.Neg" none) (.intConst () 1)
+
+-- Real constant operand ⇒ `Real.Neg` (the untyped placeholder return type is ignored).
+#guard smtTermToLExpr (negUF (.prim (.real (StrataDDM.Decimal.mk 628 (-2)))))
+  == .app () (.op () "Real.Neg" none) (.realConst () (StrataDDM.Decimal.mk 628 (-2)).toRat)
+
+-- A non-constant operand (here a variable) is not a real literal ⇒ defaults to `Int.Neg`.
+#guard smtTermToLExpr (negUF (.var { id := "x", ty := .constr "_placeholder" [] }))
+  == .app () (.op () "Int.Neg" none) (.fvar () "x" none)
+
+/-- Build a binary `(- a b)` UF application (two operands). -/
+private def binMinusUF (a b : Strata.SMT.Term) : Strata.SMT.Term :=
+  .app (.core (.uf { id := "-", args := [], out := .constr "_placeholder" [] }))
+    [a, b] (.constr "_placeholder" [])
+
+-- Binary `-` (two args) is NOT rewritten to Int.Neg; it falls through to a plain UF.
+#guard smtTermToLExpr (binMinusUF (.prim (.int 3)) (.prim (.int 1)))
+  == .app () (.app () (.fvar () "-" none) (.intConst () 3)) (.intConst () 1)
+
+-- Nested negation `-(-(1))` decodes recursively to `int.neg(int.neg(1))`.
+#guard smtTermToLExpr (negUF (negUF (.prim (.int 1))))
+  == .app () (.op () "Int.Neg" none)
+       (.app () (.op () "Int.Neg" none) (.intConst () 1))
+
+-- Nested real negation: `smtTermIsReal` inspects only the immediate operand, so
+-- the outer `-` sees an `.app` (not a real literal) and defaults to `Int.Neg`,
+-- while the inner `-` over the real literal is `Real.Neg`.
+#guard smtTermToLExpr (negUF (negUF (.prim (.real (StrataDDM.Decimal.mk 100 0)))))
+  == .app () (.op () "Int.Neg" none)
+       (.app () (.op () "Real.Neg" none) (.realConst () (StrataDDM.Decimal.mk 100 0).toRat))
+
 /-! ## Test that built-in types do not produce declare-sort -/
 
 -- Callers of addType (i.e. LMonoTy.toSMTType) should not call addType for
@@ -484,7 +530,7 @@ info: "; s1\n(declare-const s1 String)\n; s2\n(declare-const s2 String)\n(assert
   (.app () (.app () strSuffixOfOp (.fvar () "s1" (.some .string)))
     (.fvar () "s2" (.some .string)))
 
-/-! ## `ProofObligation.toSMTTerms` preserves the input datatype factory
+/-! ## Obligation encoding preserves the input datatype factory
 
 `SMT.Context.datatypes` is seeded by the caller from the env's datatype
 TypeFactory and is never modified during encoding (encoding a datatype marks it
@@ -513,7 +559,9 @@ private def typeFactoryPreserved (blocks : List (List (Lambda.LDatatype Unit)))
     (ob : Imperative.ProofObligation Expression) : Except Std.Format Bool := do
   let env ← (Env.init.addDatatypes blocks).mapError (f!"{·}")
   let ctx := { SMT.Context.default with datatypes := .ofFactory env.datatypes }
-  let (_, _, _, _, ctx', _) ← ProofObligation.toSMTTerms env.factory ob ctx
+  let encState : SMTEncodeState := .init { ctx := ctx }
+  let (res, _) ← encodeObligationToSMT env.factory encState ob
+  let ctx' := res.ctx
   .ok (ctx'.datatypes.factory == env.datatypes)
 
 -- Obligation referencing the `IntList` datatype (via its `Nil` constructor).
@@ -611,18 +659,18 @@ private def printRedexObligations (pgm : Program) : IO Unit := do
     IO.println s!"{obs.toList.length} obligation(s)"
     for ob in obs.toList do
       match (Env.init.addDatatypes []).mapError (f!"{·}") >>= fun env =>
-            ProofObligation.toSMTTerms env.factory ob SMT.Context.default with
-      | .ok (assumptions, defs, decls, goal, _, _) =>
+            encodeObligationToSMT env.factory (.init { ctx := SMT.Context.default }) ob with
+      | .ok (res, _) =>
         let render (t : Term) : String :=
           match Strata.SMTDDM.termToString t with
           | .ok s => s
           | .error e => s!"<render error: {e}>"
-        IO.println s!"{ob.label}: assumptions [{", ".intercalate (assumptions.map render)}], \
-          {defs.length} def(s), {decls.length} decl(s), goal {render goal}"
+        IO.println s!"{ob.label}: assumptions [{", ".intercalate (res.assumptions.map render)}], \
+          {res.varDefs.length} def(s), {res.varDecls.length} decl(s), goal {render res.goal}"
       | .error e => IO.println s!"{ob.label}: ERROR: {e.pretty}"
 
 -- Composed seam test: obligations extracted from the reduced program encode
--- cleanly through `ProofObligation.toSMTTerms`, and the encoded terms are the
+-- cleanly through `encodeObligationToSMT`, and the encoded terms are the
 -- reduced constants — pinning that the phase leaves nothing the encoder
 -- rejects and what the encoder actually produces.
 /--
@@ -643,6 +691,99 @@ goal: ERROR: Cannot encode .app expression (fun ignored : string => true)("v1")
 -/
 #guard_msgs in
 #eval printRedexObligations redexTestPgm
+
+/-! ## emission-time pruning defers entry encoding errors
+
+The fold step (`encodePathConditionEntry`) encodes each `PathConditionEntry`
+into a *deferred* result; `snapshotObligation` forces only the entries whose
+labels survive the `prunedLabels` filter. So an entry pruned at emission time (e.g. an
+irrelevant axiom) must not fail an obligation the base flow would have
+passed — and conversely, keeping the entry must still surface its error. Both
+label-prunable entry kinds are covered: `.assumption` and `.distinct`. -/
+
+/-- An obligation whose single assumption `bad_ax` is an unencodable redex,
+    with a trivially encodable goal. -/
+private def badAxOb : Imperative.ProofObligation Expression :=
+  { label := "q", property := .assert,
+    assumptions := [[.assumption "bad_ax"
+      (.app () (.abs () "x" none (.bvar () 0)) (.intConst () 0))]],
+    obligation := .boolConst () true, metadata := {} }
+
+-- Pruning `bad_ax` at emission time: its deferred encoding error is never
+-- forced, and the obligation encodes to just the goal — no assumption (or
+-- definition/declaration) from `bad_ax` leaks into the output.
+/-- info: Except.ok ([], 0, 0, Strata.SMT.Term.prim (Strata.SMT.TermPrim.bool true)) -/
+#guard_msgs in
+#eval (encodeObligationToSMT Core.Factory (.init { ctx := SMT.Context.default })
+    badAxOb ["bad_ax"]).mapError toString |>.map
+    fun (res, _) =>
+      (res.assumptions, res.varDefs.length, res.varDecls.length, res.goal)
+
+-- Not pruning `bad_ax` surfaces the kept entry's deferred encoding error.
+/-- info: Except.error "Cannot encode .app expression (fun x : ($__unknown_type) => x)(0)" -/
+#guard_msgs in
+#eval (encodeObligationToSMT Core.Factory (.init { ctx := SMT.Context.default })
+    badAxOb []).mapError toString |>.map
+    fun (res, _) =>
+      (res.assumptions, res.varDefs.length, res.varDecls.length, res.goal)
+
+/-- An obligation whose single frame interleaves both label-prunable entry
+    kinds in program order: an encodable distinct, an encodable assumption, an
+    unencodable distinct, an unencodable assumption, and a second encodable
+    assumption. -/
+private def mixedOb : Imperative.ProofObligation Expression :=
+  { label := "q", property := .assert,
+    assumptions := [[
+      .distinct "good_d" [.intConst () 0, .intConst () 1],
+      .assumption "good_ax_1" (.boolConst () true),
+      .distinct "bad_d"
+        [.app () (.abs () "y" none (.bvar () 0)) (.intConst () 7), .intConst () 2],
+      .assumption "bad_ax"
+        (.app () (.abs () "x" none (.bvar () 0)) (.intConst () 0)),
+      .assumption "good_ax_2" (.boolConst () false)]],
+    obligation := .boolConst () true, metadata := {} }
+
+/-- Render encoding `ob` under `pruned`: the kept asserted terms,
+    definition/declaration counts and goal, or the encoder's error. -/
+private def prunedSummary (ob : Imperative.ProofObligation Expression)
+    (pruned : List String) : String :=
+  let render (t : Term) : String :=
+    match Strata.SMTDDM.termToString t with
+    | .ok s => s
+    | .error e => s!"<render error: {e}>"
+  match encodeObligationToSMT Core.Factory (.init { ctx := SMT.Context.default }) ob pruned with
+  | .error e => s!"ERROR: {e.pretty}"
+  | .ok (res, _) =>
+    s!"asserted [{", ".intercalate (res.assumptions.map render)}], \
+      {res.varDefs.length} def(s), {res.varDecls.length} decl(s), goal {render res.goal}"
+
+-- Partial pruning of both kinds at once: the two unencodable entries are
+-- pruned, so neither deferred error is forced, and every kept entry is still
+-- emitted — distincts first, then assumptions, each in program order.
+/-- info: "asserted [(distinct 0 1), true, false], 0 def(s), 0 decl(s), goal true" -/
+#guard_msgs in
+#eval prunedSummary mixedOb ["bad_d", "bad_ax"]
+
+-- Pruning only the bad distinct leaves the bad assumption kept, so the
+-- *assumption* path's deferred error surfaces.
+/-- info: "ERROR: Cannot encode .app expression (fun x : ($__unknown_type) => x)(0)" -/
+#guard_msgs in
+#eval prunedSummary mixedOb ["bad_d"]
+
+-- Mirror image: pruning only the bad assumption leaves the bad distinct kept,
+-- so the *distinct* path's deferred error surfaces (the `y`/`7` redex). Pruning
+-- is by label, not "drop whatever fails".
+/-- info: "ERROR: Cannot encode .app expression (fun y : ($__unknown_type) => y)(7)" -/
+#guard_msgs in
+#eval prunedSummary mixedOb ["bad_ax"]
+
+-- Pruning a kept-encodable entry of each kind alongside the unencodable ones:
+-- only `good_ax_2` survives, pinning that both filters drop exactly the named
+-- labels rather than a prefix or suffix of the frame, and that an emptied
+-- distinct list contributes nothing.
+/-- info: "asserted [false], 0 def(s), 0 decl(s), goal true" -/
+#guard_msgs in
+#eval prunedSummary mixedOb ["good_d", "good_ax_1", "bad_d", "bad_ax"]
 
 end Core
 

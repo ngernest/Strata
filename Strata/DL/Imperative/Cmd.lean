@@ -57,13 +57,21 @@ instance [DecidableEq P.Expr] : LawfulBEq (ExprOrNondet P) where
   eq_of_beq h := (ExprOrNondet.beq_eq _ _).mp h
   rfl := (ExprOrNondet.beq_eq _ _).mpr rfl
 
-/-! ## Assertion Identity -/
+/-! ## Assertion and cover identity -/
 
 /-- An assertion identifier: the label + expression attached to an
     `assert` command. -/
 structure AssertId (P : PureExpr) where
   label : String
   expr  : P.Expr
+
+/-- A cover identifier: the source label and metadata attached to a `cover`
+command. Metadata distinguishes occurrences even when labels are reused.
+
+TODO: Update AssertId to have the identical definition, because labels can
+overlap, and expr may easily change after transformations.
+-/
+@[expose] abbrev CoverId (P : PureExpr) := String × MetaData P
 
 /-! ## Commands
 
@@ -194,14 +202,6 @@ def Cmds.getVars [HasFvars P] (cs : Cmds P) : List P.Ident :=
   termination_by (sizeOf cs)
 end
 
-instance (P : PureExpr) [HasFvars P]
-  : HasVarsPure P (Cmd P) where
-  getVars := Cmd.getVars
-
-instance (P : PureExpr) [HasFvars P]
-  : HasVarsPure P (Cmds P) where
-  getVars := Cmds.getVars
-
 
 /-- Get all variables defined by the command `c`. -/
 @[expose] def Cmd.definedVars (c : Cmd P) : List P.Ident :=
@@ -232,14 +232,10 @@ def Cmds.modifiedVars (cs : Cmds P) : List P.Ident :=
   | c :: crest => Cmd.modifiedVars c ++ Cmds.modifiedVars crest
   termination_by (sizeOf cs)
 
-instance (P : PureExpr) : HasVarsImp P (Cmd P) where
+instance (P : PureExpr) [HasFvars P] : HasVarsImp P (Cmd P) where
   definedVars c _ := Cmd.definedVars c
   modifiedVars := Cmd.modifiedVars
-
-instance (P : PureExpr) : HasVarsImp P (Cmds P) where
-  definedVars c _ := Cmds.definedVars c
-  modifiedVars := Cmds.modifiedVars
-  -- order matters for Havoc, so needs to override the default
+  readVars := Cmd.getVars
 
 mutual
 /-- Get all operator/function names referenced by `c`. -/

@@ -93,6 +93,13 @@ func Re.None :  () → regex;
 func mapConst : ∀[k, v]. ((d : v)) → (Map k v);
 func select : ∀[k, v]. ((m : (Map k v)) (i : k)) → v;
 func update : ∀[k, v]. ((m : (Map k v)) (i : k) (x : v)) → (Map k v);
+func Set.empty : ∀[a]. () → (Set a);
+func Set.contains : ∀[a]. ((s : (Set a)) (x : a)) → bool;
+func Set.insert : ∀[a]. ((s : (Set a)) (x : a)) → (Set a);
+func Set.remove : ∀[a]. ((s : (Set a)) (x : a)) → (Set a);
+func Set.union : ∀[a]. ((s : (Set a)) (t : (Set a))) → (Set a);
+func Set.intersect : ∀[a]. ((s : (Set a)) (t : (Set a))) → (Set a);
+func Set.difference : ∀[a]. ((s : (Set a)) (t : (Set a))) → (Set a);
 func Sequence.length : ∀[a]. ((s : (Sequence a))) → int;
 func Sequence.empty : ∀[a]. () → (Sequence a);
 func Sequence.append : ∀[a]. ((s1 : (Sequence a)) (s2 : (Sequence a))) → (Sequence a);
@@ -102,11 +109,14 @@ func Sequence.select! : ∀[a]. ((s : (Sequence a)) (i : int)) → a;
 func Sequence.build : ∀[a]. ((s : (Sequence a)) (v : a)) → (Sequence a);
 func Sequence.update : ∀[a]. ((s : (Sequence a)) (i : int) (v : a)) → (Sequence a)
   requires int.le(0, i) && int.lt(i, Sequence.length(s));
+func Sequence.update! : ∀[a]. ((s : (Sequence a)) (i : int) (v : a)) → (Sequence a);
 func Sequence.contains : ∀[a]. ((s : (Sequence a)) (v : a)) → bool;
 func Sequence.take : ∀[a]. ((s : (Sequence a)) (n : int)) → (Sequence a)
   requires int.le(0, n) && int.le(n, Sequence.length(s));
+func Sequence.take! : ∀[a]. ((s : (Sequence a)) (n : int)) → (Sequence a);
 func Sequence.drop : ∀[a]. ((s : (Sequence a)) (n : int)) → (Sequence a)
   requires int.le(0, n) && int.le(n, Sequence.length(s));
+func Sequence.drop! : ∀[a]. ((s : (Sequence a)) (n : int)) → (Sequence a);
 func Triggers.empty :  () → Triggers;
 func Triggers.addGroup :  ((g : TriggerGroup) (t : Triggers)) → Triggers;
 func TriggerGroup.empty :  () → TriggerGroup;

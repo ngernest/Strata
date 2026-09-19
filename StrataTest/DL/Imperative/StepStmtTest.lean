@@ -338,15 +338,8 @@ def Expr2.getVars : Expr2 → List String
   | .not e => e.getVars
   | _ => []
 
-/-- `HasVarsPure` for `Expr2`: only `.var` contributes a variable. -/
-instance : HasVarsPure MiniPureExpr2 Expr2 where
-  getVars := Expr2.getVars
-
 instance : HasFvars MiniPureExpr2 where
   getFvars := Expr2.getVars
-
-instance : HasVarsPure MiniPureExpr2 (Cmd MiniPureExpr2) where
-  getVars := Cmd.getVars
 
 /-- Test: `set x := var "y"` has `modifiedOrDefinedVars = ["x"]` (write-set only)
     but `touchedVars = ["x", "y"]` (includes the read variable "y"). -/
@@ -390,6 +383,7 @@ has `none` for block-local variables thanks to `projectStore`. -/
 /-- A `HasFvar` instance for `MiniPureExpr` — needed by `EvalCmd`. -/
 instance : HasFvar MiniPureExpr where
   mkFvar _ := .tt  -- unused but required
+  mkTypedFvar _ _ := .tt  -- unused but required
   getFvar _ := none   -- no expression is a free variable reference
 
 /-- `WellFormedSemanticEvalVar` for `miniEval` — trivially holds since

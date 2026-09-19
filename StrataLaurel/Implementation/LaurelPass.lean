@@ -1,0 +1,123 @@
+/-
+  Copyright Strata Contributors
+
+  SPDX-License-Identifier: Apache-2.0 OR MIT
+-/
+module
+public import Strata.Pipeline.Messages
+
+public import StrataLaurel.Implementation.SemanticModel
+public import StrataLaurel.Implementation.LaurelNodeKind
+public import Strata.Util.Statistics
+public import Strata.Languages.Core.Options
+
+namespace Strata.Laurel
+
+public section
+
+/-- Selects how the transparency pass lowers procedures for a given analysis.
+
+    - `Execute`: skip the transparency pass entirely. No `$asFunction` twins,
+      no free postconditions, and no call redirection are produced. Genuine
+      functions/externals are still emitted, but procedure calls stay procedure
+      calls, which concrete interpretation requires — redirecting a call to a
+      pure twin would drop its imperative meaning.
+    - `Verify`: redirect calls to single-output procedures to their pure
+      `$asFunction` twin so they remain constant-foldable during symbolic
+      evaluation (avoiding the term blowup that occurs when each call produces a
+      fresh symbolic output via the procedural twin). Since callers never
+      observe the procedural output, the free postconditions that equate a
+      procedure to its twin are omitted.
+    - `BothSuboptimally`: generate the twins and the free postconditions tying
+      each procedure to its twin, but leave call sites alone (procedure calls
+      stay procedure calls, function calls stay function calls). More
+      conservative than `Verify` at the cost of fresh symbolic outputs per call.
+
+    Multi-output procedures are never redirected regardless of mode, since a
+    single function application cannot fill multiple assignment targets. -/
+inductive AnalysisMode where
+  | Execute | Verify | BothSuboptimally
+  deriving BEq
+
+structure LaurelTranslateOptions where
+  inlineFunctionsWhenPossible : Bool := false
+  overflowChecks : Core.OverflowChecks := {}
+  /-- Quantifier-free modifies frame for single-reference clauses. Set-valued entries
+      keep the quantified frame. If the procedure's modifies clause contains sets,
+      this option has no effect. Use with the verifier's `useArrayTheory`. -/
+  enumeratedModifiesClauses : Bool := false
+  keepAllFilesPrefix : Option String := none
+  /-- Verify coroutines via rely/guarantee.
+
+      NOTE (v1 limitation): on the caller-verification path, `has_next(co)` is
+      elaborated as constant `true` (the opaque `resume` summary carries no
+      completion information). An obligation of the form `!has_next(co) ==> P`
+      therefore discharges *vacuously* — a vacuous pass, not a real proof that
+      `P` holds when the coroutine has finished. Proving completion-dependent
+      properties across the opaque resume is future work. -/
+  verifyCoroutine : Bool := false
+  /-- How the transparency pass lowers procedures. Defaults to `Verify`, the
+      analyze/verify behavior. See `AnalysisMode`. -/
+  analysisMode : AnalysisMode := .Verify
+  /-- Type names treated as the gradual/dynamic top type in `isConsistent`.
+      Used by language frontends (e.g. Python registers "Any" here). -/
+  gradualTypes : Std.HashSet String := {}
+  /-- Frontend-supplied realizer for the abstract `Coercion` verdict of the
+      proof-relevant subtyping judgment: maps a verdict + the coerced term to a
+      rewritten term carrying the concrete box/unbox call. `none` = identity
+      (native Laurel inserts no coercion). Threaded onto `TypeLattice`. -/
+  realizeCoercion : Option (Coercion → StmtExprMd → StmtExprMd) := none
+  /-- Caller truthiness hook (Python str_to_bool/etc.); threaded to TypeLattice.toBool. -/
+  toBool : Option (HighType → StmtExprMd → StmtExprMd) := none
+  /-- Names reserved by the frontend's coercion machinery (the realizer's box/unbox bridge
+      procedures + datatype constructors/accessors). A value binding may not shadow one; see
+      `TypeLattice.reservedNames`. Threaded onto `TypeLattice`. Empty for native Laurel. -/
+  reservedNames : Std.HashSet String := {}
+
+instance : Inhabited LaurelTranslateOptions where
+  default := {}
+
+/-- The parameter-free metadata of a pass, independent of the `Input`/`Output`
+    types it operates on. `LaurelPass` extends this so that passes with
+    different parameterizations (e.g. `LaurelPass Program Program` and
+    `LaurelPass UnorderedCoreWithLaurelTypes UnorderedCoreWithLaurelTypes`)
+    share a common, type-parameter-free view that can be collected into a
+    single homogeneous list.
+
+    The four `NodeKind` lists describe the pass's effect on the shapes present
+    in the program. Pipeline ordering is *derived* from them rather than declared
+    pass-by-pass: `LaurelCompilationPipeline.orderingFailures` folds the live shape set
+    over the pipeline and checks each pass's `unsupported` list against it. -/
+structure PassMeta where
+  /-- Human-readable name, used for profiling and file emission. -/
+  name : String
+  /-- Whether `resolve` should be run after the pass. -/
+  needsResolves : Bool := false
+  /-- A description of what this pass does, used for documentation generation. -/
+  documentation : String
+  /-- Shapes this pass introduces into the program. -/
+  creates : List NodeKind := []
+  /-- Shapes that are gone from the program after this pass has run. -/
+  removes : List NodeKind := []
+  /-- Shapes this pass cannot handle, and which must therefore already have been
+      removed by the time it runs. -/
+  unsupported : List NodeKind := []
+
+/-- A single Laurel-to-Laurel pass. Each pass receives the current program and
+    semantic model and returns the (possibly modified) program, accumulated
+    diagnostics, and statistics. Extends `PassMeta` with the `run` action; the
+    metadata fields remain directly accessible (e.g. `p.name`). -/
+structure LaurelPass (Input: Type) (Output: Type) extends PassMeta where
+  /-- The pass action. -/
+  run : LaurelTranslateOptions → Input → SemanticModel → Output × List Message × Statistics
+
+abbrev LoweringPass := LaurelPass Laurel.Program Laurel.Program
+
+/-- Project a `LaurelPass` to its parameter-free metadata, discarding the
+    `run` action and the `Input`/`Output` type parameters. -/
+abbrev LaurelPass.meta {Input Output : Type} (p : LaurelPass Input Output) : PassMeta :=
+  p.toPassMeta
+
+end -- public section
+
+end Strata.Laurel

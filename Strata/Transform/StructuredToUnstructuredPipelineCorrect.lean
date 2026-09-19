@@ -68,9 +68,10 @@ private theorem ndelimKind_not_s2uKind {s : String} (h : ndelimKind s) :
 
 open Imperative.Specification
 open Imperative.Specification.Transform
+open Imperative.Logic
 
 variable [HasFvar P] [HasFvars P] [HasBoolOps P]
-  [HasIdent P] [HasInt P] [HasIntOps P] [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+  [HasIdent P] [HasInt P] [HasIntOps P] [DecidableEq P.Ident]
   [LawfulHasFvar P] [LawfulHasIdent P]
 
 /-- Under `PipelinePre`, `nondetElim` overapproximates the source imperative-block
@@ -134,7 +135,7 @@ private theorem hpre_src_ndelim [HasSubstFvar P] :
         ∧ Block.noMeasureLoops ss = true
         ∧ Block.uniqueInits ss
         ∧ Block.exitsCoveredByBlocks [] ss
-        ∧ Block.simpleShape ss = true
+        ∧ Block.noNondetGuards ss = true
         ∧ Block.userLabelsShapeNodup ss
         ∧ (∀ s : String, StructuredToUnstructuredCorrect.s2uKind s →
             HasIdent.ident (P := P) s ∉ Block.initVars ss)) ss' := by
@@ -152,8 +153,8 @@ private theorem hpre_src_ndelim [HasSubstFvar P] :
       hpre.h_unique (fun str hk => hpre.h_disj_initVars str (Or.inl hk))).2
   · -- exit coverage is preserved by `nondetElim`.
     exact Block.nondetElim_exitsCoveredByBlocks ss hpre.h_covered
-  · -- `simpleShape (nondetElim ss) = true` (`nondetElim` always emits simple shape).
-    exact nondetElim_simpleShape ss
+  · -- `noNondetGuards (nondetElim ss) = true` (`nondetElim` removes every nondet guard).
+    exact nondetElim_noNondetGuards ss
   · -- `userLabelsShapeNodup (nondetElim ss)`: `nondetElim` preserves `getBlockLabels`.
     unfold Block.userLabelsShapeNodup
     rw [Block.nondetElim_getBlockLabels]
@@ -165,8 +166,8 @@ private theorem hpre_src_ndelim [HasSubstFvar P] :
     · exact hpre.h_disj_initVars str (Or.inr hk) h_src
     · exact ndelimKind_not_s2uKind h_nd (LawfulHasIdent.ident_inj h_eq ▸ hk)
 
-omit [LawfulHasFvar P] [HasFvar P] [HasFvars P] [HasBoolOps P] in
-omit [HasInt P] [HasIntOps P] [HasVarsPure P P.Expr] [DecidableEq P.Ident] [LawfulHasIdent P] in
+omit [LawfulHasFvar P] [HasFvar P] [HasBoolOps P] in
+omit [HasInt P] [HasIntOps P] [DecidableEq P.Ident] [LawfulHasIdent P] in
 /-- `pre_ndelim → pre_hoist ∘ hoistLoopPrefixInits`: the `stmtsToCFG` instance's
 `pre` holds on the `hoist` output. -/
 private theorem hpre_ndelim_hoist :
@@ -178,13 +179,13 @@ private theorem hpre_ndelim_hoist :
         ∧ Block.noMeasureLoops ss = true
         ∧ Block.uniqueInits ss
         ∧ Block.exitsCoveredByBlocks [] ss
-        ∧ Block.simpleShape ss = true
+        ∧ Block.noNondetGuards ss = true
         ∧ Block.userLabelsShapeNodup ss
         ∧ (∀ s : String, StructuredToUnstructuredCorrect.s2uKind s →
             HasIdent.ident (P := P) s ∉ Block.initVars ss)) ss →
       (fun ss =>
         Block.noFuncDecl ss = true
-        ∧ Block.simpleShape ss = true
+        ∧ Block.noNondetGuards ss = true
         ∧ Block.uniqueInits ss
         ∧ Block.loopBodyNoInits ss = true
         ∧ Block.loopHasNoInvariants ss = true
@@ -200,7 +201,7 @@ private theorem hpre_ndelim_hoist :
     h_simple, h_userlabels, h_s2u_iv⟩ := hpre
   have h_nofd : Block.noFuncDecl ss = true := h_no_fd
   refine ⟨LoopInitHoistProducerProps.Block.hoistP_noFuncDecl ss h_nofd,
-    LoopInitHoistProducerProps.Block.hoistP_simpleShape ss h_simple,
+    LoopInitHoistProducerProps.Block.hoistP_noNondetGuards ss h_simple,
     (LoopInitHoistProducerProps.Block.hoistP_initVars_perm ss).nodup_iff.mpr h_unique,
     LoopInitHoistProducerProps.Block.hoistP_loopBodyNoInits ss,
     LoopInitHoistProducerProps.Block.hoistP_loopHasNoInvariants ss h_no_inv, ?_, ?_, ?_, ?_⟩
@@ -263,7 +264,7 @@ private theorem pipeline_overapproximates_upto_composed [HasSubstFvar P]
     (nondetElim_overapproximates_upto extendFactory)
     h_inner
 
-omit [HasVarsPure P P.Expr] [LawfulHasFvar P]
+omit [LawfulHasFvar P]
   [LawfulHasIdent P] [DecidableEq P.Ident]
  in
 /-- The composed per-pass transform `nondetElim >=> hoist >=> stmtsToCFG`
@@ -301,7 +302,7 @@ theorem pipeline_overapproximates_upto_via_passes [HasSubstFvar P]
 `PipelinePre`, ruling out global vacuity of the `fun ss => PipelinePre ss`
 precondition. -/
 theorem pipelinePre_nil {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
-    [HasVarsPure P P.Expr] [HasIdent P] [HasInt P] [HasIntOps P]
+    [HasIdent P] [HasInt P] [HasIntOps P]
     [HasSubstFvar P] [DecidableEq P.Ident] :
     PipelinePre ([] : List (Stmt P (Cmd P))) where
   h_nofd := by simp [Block.noFuncDecl]

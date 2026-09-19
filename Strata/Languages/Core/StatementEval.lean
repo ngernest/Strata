@@ -583,11 +583,15 @@ private def evalOneStmt (old_var_subst : SubstMap)
   | .ite cond then_ss else_ss _ =>
     match cond with
     | .nondet =>
-      let freshName : CoreIdent := ⟨s!"$__nondet_cond_{Ewn.env.pathConditions.scopes.length}", ()⟩
-      let freshVar : Expression.Expr := .fvar () freshName none
-      let initStmt := Statement.init freshName (.forAll [] (.tcons "bool" [])) .nondet (Imperative.MetaData.ofProvenance (.synthesized .nondetIte))
-      let iteStmt := Imperative.Stmt.ite (.det freshVar) then_ss else_ss (Imperative.MetaData.ofProvenance (.synthesized .nondetIte))
-      evalSub Ewn [initStmt, iteStmt] nextSplitId
+      -- A nondeterministic `if *` must be eliminated (by the `nondetElim`
+      -- transform) before symbolic evaluation. Reject it so the failure
+      -- surfaces rather than producing an incomplete obligation set.
+      ([{ Ewn with
+            env := { Ewn.env with error := some (.Misc
+              f!"nondeterministic `if *` reached symbolic evaluation; run the \
+                 nondetElim transform to eliminate nondeterministic control first") },
+            exitLabel := .none }],
+        noStats, nextSplitId)
     | .det c =>
       let cond' := Ewn.env.exprEval c
       match cond' with
@@ -603,9 +607,11 @@ private def evalOneStmt (old_var_subst : SubstMap)
               deadDeferred ++ first.env.deferred } :: restEwns, liveStats, nextSplitId)
       | _ => processBranches Ewn c cond' then_ss else_ss nextSplitId
   | .loop _ _ _ _ _ =>
-    panic! "Cannot evaluate `loop` statement. \
-            Please transform your program to eliminate loops before \
-            calling Core.Statement.evalAux"
+    -- Symbolic evaluation requires `noLoops`; a loop here is reported as an
+    -- error rather than a panic.
+    ([{ Ewn with env := { Ewn.env with error := some (.Misc
+        f!"cannot evaluate a `loop` statement: eliminate loops before symbolic \
+           evaluation") } }], noStats, nextSplitId)
   | .funcDecl decl _ =>
     let paramNames := decl.inputs.map (·.1)
     -- Lift the AST funcDecl into an evaluator-facing `LFunc` (concreteEval defaults to none).
@@ -818,7 +824,7 @@ def Command.runCall (lhs : List Expression.Ident) (procName : String) (args : Li
                 Imperative.runStmt ops fuel' config
               | .cfg _ =>
                 .terminal (CmdEval.updateError callEnv
-                  (.Misc s!"procedure '{procName}': CFG bodies not supported yet"))
+                  (.Misc "CFG bodies not supported yet"))
             match configAfter with
             | .terminal callEnv' =>
               let E := { E with assertFailures := callEnv'.assertFailures }

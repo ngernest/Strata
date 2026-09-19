@@ -5,7 +5,7 @@
 -/
 module
 
-public import Strata.DL.Imperative.Cmd
+public import Strata.DL.Imperative.CmdTrace
 public import Strata.Util.ListMapProps
 import all Strata.Util.ListUtils
 import all Strata.Util.ListUtilsProps
@@ -20,12 +20,6 @@ section
 
 variable (P : PureExpr)
 
-/-
-These are intended to be as generic as possible, not using any specific
-data structure. They'll probably usually be instantiated with map
-lookups.
--/
-@[expose] abbrev SemanticStore := P.Ident → Option P.Expr
 @[expose] abbrev SemanticEval := P.Factory → SemanticStore P → P.Expr → Option P.Expr
 @[expose] abbrev SemanticEvalBool := P.Factory → SemanticStore P → P.Expr → Option Bool
 
@@ -39,6 +33,13 @@ when the command signals a failure.
 -/
 @[expose] abbrev EvalCmdParam (P : PureExpr) (Cmd : Type) :=
   P.Factory → SemanticStore P → Cmd → SemanticStore P → Bool → Prop
+
+/-- Command evaluation relation that reports an ordered event trace instead of
+an assertion-failure flag.  The event payload type `EventT` is a parameter so
+that generic operational metatheory can be stated over an arbitrary payload; the
+base command semantics `EvalCmdE` instantiates it at `Trace P`. -/
+@[expose] abbrev EvalCmdParamE (P : PureExpr) (Cmd : Type) (EventT : Type) :=
+  P.Factory → SemanticStore P → Cmd → SemanticStore P → List EventT → Prop
 
 /-! ### Well-Formedness of `SemanticStore` -/
 
@@ -87,6 +88,9 @@ structure WellFormedSemanticEvalVal {P : PureExpr} [HasVal P]
 structure WellFormedSemanticEvalInt {P : PureExpr}
     [HasBool P] [HasFvars P] [HasInt P] [HasIntOps P]
     (f : P.Factory) : Prop where
+  /-- Comparing two evaluated integer numerals with `<` reduces to a Boolean
+      value: the result is either `tt` or `ff`, never a stuck or non-Boolean
+      expression. -/
   ltReduces : ∀ σ x y nx ny,
     P.eval f σ x = some nx → HasInt.isNumeral nx = Bool.true →
     P.eval f σ y = some ny → HasInt.isNumeral ny = Bool.true →
@@ -250,7 +254,7 @@ def invStores {P : PureExpr} (σ₁ σ₂ : SemanticStore P) (vs : List P.Ident)
   substStores σ₁ σ₂ $ vs.zip vs
 
 def invStoresExcept {P : PureExpr} (σ₁ σ₂ : SemanticStore P) (vs : List P.Ident)
-  : Prop := ∀ (vs' : List P.Ident), vs'.Disjoint vs → invStores σ₁ σ₂ vs'
+  : Prop := ∀ (vs' : List P.Ident), vs'.Disj vs → invStores σ₁ σ₂ vs'
 
 def substSwap {P : PureExpr} (substs : List (P.Ident × P.Ident))
   : List (P.Ident × P.Ident) := substs.map Prod.swap
@@ -366,6 +370,72 @@ inductive EvalCmd [HasFvar P] [HasBool P] [HasBoolOps P] :
     WellFormedSemanticEvalBool (P := P) f →
     ----
     EvalCmd f σ (.cover _ e _) σ false
+
+
+/-- The event trace emitted by a base command at its input snapshot. Assertions,
+assumptions, and covers emit their captured condition; all other commands are
+silent. -/
+@[expose] def Cmd.emittedEvents :
+    Cmd P → P.Factory → SemanticStore P → Trace P
+  | .assert label expr metadata, f, σ =>
+      [.assert { factory := f, store := σ, label, expr, metadata }]
+  | .assume label expr metadata, f, σ =>
+      [.assume { factory := f, store := σ, label, expr, metadata }]
+  | .cover label expr metadata, f, σ =>
+      [.cover { factory := f, store := σ, label, expr, metadata }]
+  | _, _, _ => []
+
+/-- Event-producing command semantics.
+
+Assertions, assumptions, and covers are unconditional skips on the store that
+emit their unevaluated condition at the input snapshot. They do not ask the
+partial evaluator to reduce the condition to a Boolean. -/
+inductive EvalCmdE [HasFvar P] [HasBool P] :
+    P.Factory → SemanticStore P → Cmd P → SemanticStore P → Trace P → Prop where
+  /-- Evaluate a deterministic initializer, update the store, and emit no
+  observation. -/
+  | eval_init :
+    P.eval f σ e = .some v →
+    InitState P σ x v σ' →
+    WellFormedSemanticEvalVar (P := P) f →
+    EvalCmdE f σ (.init x ty (.det e) md) σ' []
+
+  /-- Initialize a variable with an arbitrary value and emit no observation. -/
+  | eval_init_unconstrained :
+    InitState P σ x v σ' →
+    HasVal.value f v →
+    WellFormedSemanticEvalVar (P := P) f →
+    EvalCmdE f σ (.init x ty .nondet md) σ' []
+
+  /-- Evaluate a deterministic assignment, update the store, and emit no
+  observation. -/
+  | eval_set :
+    P.eval f σ e = .some v →
+    UpdateState P σ x v σ' →
+    WellFormedSemanticEvalVar (P := P) f →
+    EvalCmdE f σ (.set x (.det e) md) σ' []
+
+  /-- Assign an arbitrary value and emit no observation. -/
+  | eval_set_nondet :
+    UpdateState P σ x v σ' →
+    HasVal.value f v →
+    WellFormedSemanticEvalVar (P := P) f →
+    EvalCmdE f σ (.set x .nondet md) σ' []
+
+  /-- Preserve the store and emit the captured assertion condition. -/
+  | eval_assert :
+    EvalCmdE f σ (.assert label e md) σ
+      [.assert { factory := f, store := σ, label := label, expr := e, metadata := md }]
+
+  /-- Preserve the store and emit the captured assumption condition. -/
+  | eval_assume :
+    EvalCmdE f σ (.assume label e md) σ
+      [.assume { factory := f, store := σ, label := label, expr := e, metadata := md }]
+
+  /-- Preserve the store and emit the captured coverage condition. -/
+  | eval_cover :
+    EvalCmdE f σ (.cover label e md) σ
+      [.cover { factory := f, store := σ, label := label, expr := e, metadata := md }]
 
 end section
 

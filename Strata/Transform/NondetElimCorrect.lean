@@ -23,71 +23,74 @@ namespace Imperative
 
 /-! ## Structural postcondition: the pass output has no nondeterministic control
 
-`Block.simpleShape` holds of every output of `Block.nondetElim` (spec guarantee
+`Block.noNondetGuards` holds of every output of `Block.nondetElim` (spec guarantee
 2): the rewrite replaces each nondeterministic `.ite`/`.loop` guard with a
 deterministic read, so no `.ite .nondet`/`.loop .nondet` survives. -/
 
 mutual
-/-- The output of `Stmt.nondetElimM s σ` satisfies `simpleShape` (no
+/-- The output of `Stmt.nondetElimM s σ` satisfies `noNondetGuards` (no
 nondeterministic control). -/
-theorem Stmt.nondetElimM_simpleShape {P : PureExpr} [HasIdent P] [HasFvar P] [HasFvars P] [HasBool P]
+theorem Stmt.nondetElimM_noNondetGuards {P : PureExpr} [HasIdent P] [HasFvar P] [HasFvars P] [HasBool P]
     (s : Stmt P (Cmd P)) (σ : StringGenState) :
-    Block.simpleShape (Stmt.nondetElimM s σ).1 = true := by
+    Block.noNondetGuards (Stmt.nondetElimM s σ).1 = true := by
   match s with
-  | .cmd c => simp [Stmt.nondetElimM, Block.simpleShape, Stmt.simpleShape]
+  | .cmd c => simp [Stmt.nondetElimM, Block.noNondetGuards, Stmt.noNondetGuards]
   | .block lbl bss md =>
       rw [Stmt.nondetElimM_block_out]
-      simp only [Block.simpleShape, Stmt.simpleShape, Bool.and_true]
-      exact Block.nondetElimM_simpleShape bss σ
+      simp only [Block.noNondetGuards, Stmt.noNondetGuards, Bool.and_true]
+      exact Block.nondetElimM_noNondetGuards bss σ
   | .ite (.det e) tss ess md =>
       rw [Stmt.nondetElimM_ite_det_out]
-      simp only [Block.simpleShape, Stmt.simpleShape, Bool.and_true,
-                 Block.nondetElimM_simpleShape tss σ,
-                 Block.nondetElimM_simpleShape ess _]
+      simp only [Block.noNondetGuards, Stmt.noNondetGuards, Bool.and_true,
+                 Block.nondetElimM_noNondetGuards tss σ,
+                 Block.nondetElimM_noNondetGuards ess _]
   | .ite .nondet tss ess md =>
       rw [Stmt.nondetElimM_ite_nondet_out]
-      simp only [Block.simpleShape, Stmt.simpleShape, Bool.and_true,
-                 Block.nondetElimM_simpleShape tss _,
-                 Block.nondetElimM_simpleShape ess _]
+      simp only [Block.noNondetGuards, Stmt.noNondetGuards, Bool.and_true,
+                 Block.nondetElimM_noNondetGuards tss _,
+                 Block.nondetElimM_noNondetGuards ess _]
   | .loop (.det e) m inv body md =>
       rw [Stmt.nondetElimM_loop_det_out]
-      simp only [Block.simpleShape, Stmt.simpleShape, Bool.and_true]
-      exact Block.nondetElimM_simpleShape body σ
+      simp only [Block.noNondetGuards, Stmt.noNondetGuards, Bool.and_true]
+      exact Block.nondetElimM_noNondetGuards body σ
   | .loop .nondet m inv body md =>
       rw [Stmt.nondetElimM_loop_nondet_out]
-      simp only [Block.simpleShape, Stmt.simpleShape, Block.simpleShape_append,
+      simp only [Block.noNondetGuards, Stmt.noNondetGuards, Block.noNondetGuards_append,
                  Bool.and_true,
-                 Block.nondetElimM_simpleShape body _]
-  | .exit lbl md => simp [Stmt.nondetElimM, Block.simpleShape, Stmt.simpleShape]
-  | .funcDecl d md => simp [Stmt.nondetElimM, Block.simpleShape, Stmt.simpleShape]
-  | .typeDecl t md => simp [Stmt.nondetElimM, Block.simpleShape, Stmt.simpleShape]
+                 Block.nondetElimM_noNondetGuards body _]
+  | .exit lbl md => simp [Stmt.nondetElimM, Block.noNondetGuards, Stmt.noNondetGuards]
+  | .funcDecl d md => simp [Stmt.nondetElimM, Block.noNondetGuards, Stmt.noNondetGuards]
+  | .typeDecl t md => simp [Stmt.nondetElimM, Block.noNondetGuards, Stmt.noNondetGuards]
   termination_by sizeOf s
 
-theorem Block.nondetElimM_simpleShape {P : PureExpr} [HasIdent P] [HasFvar P] [HasFvars P] [HasBool P]
+/-- Block-level counterpart of the statement case: the output of
+    `Block.nondetElimM ss σ` has no nondeterministic guard, in any of its
+    statements. -/
+theorem Block.nondetElimM_noNondetGuards {P : PureExpr} [HasIdent P] [HasFvar P] [HasFvars P] [HasBool P]
     (ss : List (Stmt P (Cmd P))) (σ : StringGenState) :
-    Block.simpleShape (Block.nondetElimM ss σ).1 = true := by
+    Block.noNondetGuards (Block.nondetElimM ss σ).1 = true := by
   match ss with
-  | [] => simp [Block.nondetElimM, Block.simpleShape]
+  | [] => simp [Block.nondetElimM, Block.noNondetGuards]
   | s :: rest =>
-      rw [Block.nondetElimM_cons_out, Block.simpleShape_append]
-      simp only [Stmt.nondetElimM_simpleShape s σ,
-                 Block.nondetElimM_simpleShape rest _, Bool.and_true]
+      rw [Block.nondetElimM_cons_out, Block.noNondetGuards_append]
+      simp only [Stmt.nondetElimM_noNondetGuards s σ,
+                 Block.nondetElimM_noNondetGuards rest _, Bool.and_true]
   termination_by sizeOf ss
 end
 
 /-- Top-level structural postcondition: `Block.nondetElim` output has no
 nondeterministic control (spec guarantee 2). -/
-theorem nondetElim_simpleShape {P : PureExpr} [HasIdent P] [HasFvar P] [HasFvars P] [HasBool P]
+theorem nondetElim_noNondetGuards {P : PureExpr} [HasIdent P] [HasFvar P] [HasFvars P] [HasBool P]
     (ss : List (Stmt P (Cmd P))) :
-    Block.simpleShape (Block.nondetElim ss) = true :=
-  Block.nondetElimM_simpleShape ss StringGenState.emp
+    Block.noNondetGuards (Block.nondetElim ss) = true :=
+  Block.nondetElimM_noNondetGuards ss StringGenState.emp
 
 /-- `nondetElim` removes nondeterministic loops, so its output satisfies
-`containsNondetLoop = false` (via the `simpleShape` postcondition). -/
+`containsNondetLoop = false` (via the `noNondetGuards` postcondition). -/
 theorem nondetElim_containsNondetLoop {P : PureExpr} [HasIdent P] [HasFvar P] [HasFvars P] [HasBool P]
     (ss : List (Stmt P (Cmd P))) :
     Block.containsNondetLoop (Block.nondetElim ss) = false :=
-  Block.not_containsNondetLoop_of_simpleShape _ (nondetElim_simpleShape ss)
+  Block.not_containsNondetLoop_of_noNondetGuards _ (nondetElim_noNondetGuards ss)
 
 /-! ## Foundation lemmas for the simulation proof
 
@@ -102,7 +105,7 @@ section Foundation
 outcome at the block-projected env (the ite branch runs in a `.block .none`
 scope, so the guard `ident` — defined by the `init` prefix — is projected away). -/
 theorem step_ndelim_ite_prefix_outcome {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident] [LawfulHasFvar P] {extendFactory : ExtendFactory P}
+    [DecidableEq P.Ident] [LawfulHasFvar P] {extendFactory : ExtendFactory P}
     (b : Bool) (ident : P.Ident) (tss ess : List (Stmt P (Cmd P))) (md : MetaData P)
     (ρ ρt' : Env P) (oc : Option String)
     (h_none : ρ.store ident = none)
@@ -115,7 +118,7 @@ theorem step_ndelim_ite_prefix_outcome {P : PureExpr} [HasFvar P] [HasFvars P] [
       (Env.outcomeConfig oc ρt')) :
     StepStmtStar P (EvalCmd P) extendFactory
       (.stmts [.cmd (HasInit.init ident HasBool.boolTy (.nondet) md),
-               .ite (.det (HasFvar.mkFvar ident)) tss ess md] ρ)
+               .ite (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) tss ess md] ρ)
       (Env.outcomeConfig oc ({ ρt' with
         store := projectStore (SemanticStore.update ρ.store ident (if b then HasBool.tt else HasBool.ff)) ρt'.store,
         factory := ρ.factory } : Env P)) := by
@@ -127,19 +130,19 @@ theorem step_ndelim_ite_prefix_outcome {P : PureExpr} [HasFvar P] [HasFvars P] [
   let ρg : Env P := { ρ with store := SemanticStore.update ρ.store ident v }
   have h1 : StepStmtStar P (EvalCmd P) extendFactory
       (.stmts [.cmd (HasInit.init ident HasBool.boolTy (.nondet) md),
-               .ite (.det (HasFvar.mkFvar ident)) tss ess md] ρ)
-      (.stmts [.ite (.det (HasFvar.mkFvar ident)) tss ess md] ρg) :=
+               .ite (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) tss ess md] ρ)
+      (.stmts [.ite (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) tss ess md] ρg) :=
     stmts_cons_step P (EvalCmd P) extendFactory _ _ ρ ρg
       (step_init_havoc_to (extendFactory := extendFactory) ident HasBool.boolTy v md ρ h_none hval hwf_var)
-  have h_guard : P.eval ρg.factory ρg.store (HasFvar.mkFvar ident) = some v :=
-    eval_mkFvar_storeWith ρ.factory ρ.store ident v hval hwf_var hwf_mono
+  have h_guard : P.eval ρg.factory ρg.store (HasFvar.mkTypedFvar ident HasBool.boolTy) = some v :=
+    eval_mkTypedFvar_storeWith ρ.factory ρ.store ident v hval hwf_var hwf_mono
   have hwfb' : WellFormedSemanticEvalBool ρg.factory := hwfb
   have h_blk : StepStmtStar P (EvalCmd P) extendFactory
       (.block .none ρg.store ρg.factory (.stmts (if b then tss else ess) ρg))
       (Env.outcomeConfig oc ({ ρt' with store := projectStore ρg.store ρt'.store, factory := ρg.factory } : Env P)) :=
     blockT_none_build_outcome (extendFactory := extendFactory) _ ρg.store ρg.factory oc ρt' h_branch
   have h2 : StepStmtStar P (EvalCmd P) extendFactory
-      (.stmts [.ite (.det (HasFvar.mkFvar ident)) tss ess md] ρg)
+      (.stmts [.ite (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) tss ess md] ρg)
       (Env.outcomeConfig oc ({ ρt' with store := projectStore ρg.store ρt'.store, factory := ρg.factory } : Env P)) := by
     refine .step _ _ _ .step_stmts_cons ?_
     cases b with
@@ -155,7 +158,7 @@ theorem step_ndelim_ite_prefix_outcome {P : PureExpr} [HasFvar P] [HasFvars P] [
 at least one step.  (A refl run would keep the config at `.stmt s ρ`, whose
 `getEnv` is the clean `ρ`, contradicting the failing flag.)  Exposes the first
 step and residual. -/
-theorem clean_stmt_first_step {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] [HasVarsPure P P.Expr] {extendFactory : ExtendFactory P}
+theorem clean_stmt_first_step {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] {extendFactory : ExtendFactory P}
     {s : Stmt P (Cmd P)} {ρ : Env P} {c : Config P (Cmd P)}
     (h_reach : StepStmtStar P (EvalCmd P) extendFactory (.stmt s ρ) c)
     (hc : c.getEnv.hasFailure = true)
@@ -170,7 +173,7 @@ theorem clean_stmt_first_step {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOp
 (not necessarily terminal/exiting) yields the singleton list reaching a failing
 config.  The residual `d` is wrapped as `.seq d []`, whose `getEnv` (hence failure
 flag) is `d`'s. -/
-theorem stmt_to_singleton_stmts_fail {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] [HasVarsPure P P.Expr] {extendFactory : ExtendFactory P}
+theorem stmt_to_singleton_stmts_fail {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] {extendFactory : ExtendFactory P}
     (s : Stmt P (Cmd P)) (ρ : Env P) (d : Config P (Cmd P))
     (h : StepStmtStar P (EvalCmd P) extendFactory (.stmt s ρ) d)
     (hd : d.getEnv.hasFailure = true) :
@@ -184,7 +187,7 @@ theorem stmt_to_singleton_stmts_fail {P : PureExpr} [HasFvar P] [HasFvars P] [Ha
 reaching a *failing* config drives the emitted `init $g; ite $g` prefix to a
 failing config (havoc value `tt`). -/
 theorem step_ndelim_ite_prefix_fail {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident] [LawfulHasFvar P] {extendFactory : ExtendFactory P}
+    [DecidableEq P.Ident] [LawfulHasFvar P] {extendFactory : ExtendFactory P}
     (b : Bool) (ident : P.Ident) (tss ess : List (Stmt P (Cmd P))) (md : MetaData P)
     (ρ : Env P) (d : Config P (Cmd P))
     (h_none : ρ.store ident = none)
@@ -197,7 +200,7 @@ theorem step_ndelim_ite_prefix_fail {P : PureExpr} [HasFvar P] [HasFvars P] [Has
     (hd : d.getEnv.hasFailure = true) :
     ∃ d', StepStmtStar P (EvalCmd P) extendFactory
       (.stmts [.cmd (HasInit.init ident HasBool.boolTy (.nondet) md),
-               .ite (.det (HasFvar.mkFvar ident)) tss ess md] ρ) d'
+               .ite (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) tss ess md] ρ) d'
       ∧ d'.getEnv.hasFailure = true := by
   let v : P.Expr := if b then HasBool.tt else HasBool.ff
   have hval : HasVal.value ρ.factory v := by
@@ -207,12 +210,12 @@ theorem step_ndelim_ite_prefix_fail {P : PureExpr} [HasFvar P] [HasFvars P] [Has
   let ρg : Env P := { ρ with store := SemanticStore.update ρ.store ident v }
   have h1 : StepStmtStar P (EvalCmd P) extendFactory
       (.stmts [.cmd (HasInit.init ident HasBool.boolTy (.nondet) md),
-               .ite (.det (HasFvar.mkFvar ident)) tss ess md] ρ)
-      (.stmts [.ite (.det (HasFvar.mkFvar ident)) tss ess md] ρg) :=
+               .ite (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) tss ess md] ρ)
+      (.stmts [.ite (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) tss ess md] ρg) :=
     stmts_cons_step P (EvalCmd P) extendFactory _ _ ρ ρg
       (step_init_havoc_to (extendFactory := extendFactory) ident HasBool.boolTy v md ρ h_none hval hwf_var)
-  have h_guard : P.eval ρg.factory ρg.store (HasFvar.mkFvar ident) = some v :=
-    eval_mkFvar_storeWith ρ.factory ρ.store ident v hval hwf_var hwf_mono
+  have h_guard : P.eval ρg.factory ρg.store (HasFvar.mkTypedFvar ident HasBool.boolTy) = some v :=
+    eval_mkTypedFvar_storeWith ρ.factory ρ.store ident v hval hwf_var hwf_mono
   -- The single-statement `.ite` scopes the chosen branch in a `.block .none`; run
   -- the branch inside that scope to the failing config `.block none ρg.store ρg.factory d`
   -- (a `.block`'s `getEnv` is its inner config's, so the failure flag is preserved).
@@ -222,13 +225,13 @@ theorem step_ndelim_ite_prefix_fail {P : PureExpr} [HasFvar P] [HasFvars P] [Has
     block_inner_star P (EvalCmd P) extendFactory _ _ .none ρg.store ρg.factory h_branch
   have hdblk : dblk.getEnv.hasFailure = true := by simpa only [dblk, Config.getEnv] using hd
   have h_ite : StepStmtStar P (EvalCmd P) extendFactory
-      (.stmt (.ite (.det (HasFvar.mkFvar ident)) tss ess md) ρg) dblk := by
+      (.stmt (.ite (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) tss ess md) ρg) dblk := by
     cases b with
     | true => exact .step _ _ _ (.step_ite_true h_guard hwfb) h_blk_run
     | false => exact .step _ _ _ (.step_ite_false h_guard hwfb) h_blk_run
   obtain ⟨d', h2, hd'⟩ :=
     stmt_to_singleton_stmts_fail (extendFactory := extendFactory)
-      (.ite (.det (HasFvar.mkFvar ident)) tss ess md) ρg dblk h_ite hdblk
+      (.ite (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) tss ess md) ρg dblk h_ite hdblk
   exact ⟨d', ReflTrans_Transitive _ _ _ _ h1 h2, hd'⟩
 
 /-! ### ReflTransT decomposition helpers (for the loop fuel induction)
@@ -249,7 +252,7 @@ The invariant list `inv` is threaded verbatim and plays no role in the
 enter/exit inversion; the residual carries a strict len-decrease.  Casing `oc` makes the outcome target a
 constructor, so the `.refl` case (which would require `Env.outcomeConfig oc ρ' =
 .stmt (.loop …)`) is ruled out by constructor mismatch. -/
-theorem loop_det_step_first_inv {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] [HasVarsPure P P.Expr] {extendFactory : ExtendFactory P}
+theorem loop_det_step_first_inv {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] {extendFactory : ExtendFactory P}
     {e : P.Expr} {m : Option P.Expr} {inv : List (String × P.Expr)}
     {body : List (Stmt P (Cmd P))} {md : MetaData P}
     {ρ ρ' : Env P} {oc : Option String}
@@ -289,7 +292,7 @@ theorem loop_det_step_first_inv {P : PureExpr} [HasFvar P] [HasFvars P] [HasBool
 The invariant list `inv` is threaded verbatim and plays no role in the
 enter/exit inversion; the residual carries a strict len-decrease.  Unlike the deterministic variant there is *no*
 guard read: the enter/exit choice is genuinely nondeterministic. -/
-theorem loop_nondet_step_first_inv {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] [HasVarsPure P P.Expr] {extendFactory : ExtendFactory P}
+theorem loop_nondet_step_first_inv {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] {extendFactory : ExtendFactory P}
     {m : Option P.Expr} {inv : List (String × P.Expr)}
     {body : List (Stmt P (Cmd P))} {md : MetaData P}
     {ρ ρ' : Env P} {oc : Option String}
@@ -330,7 +333,7 @@ failing config, forcing `ρ.hasFailure = true`): the run is either reflexive
 `.seq (.block .none ρ.store ρ.factory (.stmts body (ρ + false))) [loop]`), with the
 residual carrying the failing config and a strict len-decrease. -/
 theorem loop_nondet_step_first_inv_fail {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
-    [HasVarsPure P P.Expr] {extendFactory : ExtendFactory P}
+    {extendFactory : ExtendFactory P}
     {m : Option P.Expr} {inv : List (String × P.Expr)}
     {body : List (Stmt P (Cmd P))} {md : MetaData P}
     {ρ : Env P} {c : Config P (Cmd P)}
@@ -447,7 +450,7 @@ the obligation across sequencing and recursion automatically. -/
 
 /-- The source-shape precondition over a source block: no statement in `ss`
 ever defines or modifies a `Q`-kind variable. -/
-@[expose] def SrcNoGenWrites {P : PureExpr} [HasIdent P]
+@[expose] def SrcNoGenWrites {P : PureExpr} [HasFvars P] [HasIdent P]
     (Q : String → Prop)
     (ss : List (Stmt P (Cmd P))) : Prop :=
   (∀ s : String, Q s → HasIdent.ident (P := P) s ∉ (Block.definedVars ss false ++ Block.modifiedVars ss))
@@ -455,7 +458,7 @@ ever defines or modifies a `Q`-kind variable. -/
 /-- A single `EvalCmd` whose command writes no `Q`-kind variable preserves the
 "no `Q`-kind slot is defined" invariant on its store. -/
 theorem evalCmd_preserves_src_fresh {P : PureExpr} [HasFvar P] [HasFvars P]
-    [HasBoolOps P] [HasIdent P] [HasVarsPure P P.Expr]
+    [HasBoolOps P] [HasIdent P]
     {Q : String → Prop}
     {f : P.Factory} {σ σ' : SemanticStore P} {c : Cmd P} {haf : Bool}
     (h : EvalCmd P f σ c σ' haf)
@@ -483,7 +486,7 @@ The target-undefinedness at an `init` site comes from the explicit
 `h_tgt_init_undef` premise; the non-init cases need no freshness, since
 `StoreAgreement` supplies the expression-variable pointwise equality directly. -/
 theorem cmd_replay_storeAgree {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P] [HasIdent P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident] [LawfulHasIdent P]
+    [DecidableEq P.Ident] [LawfulHasIdent P]
     (f : P.Factory) (σ_src₀ σ_tgt₀ : SemanticStore P)
     (c : Cmd P) (σ_src₁ : SemanticStore P) (failed : Bool)
     (h_agree : StoreAgreement σ_src₀ σ_tgt₀)
@@ -603,7 +606,7 @@ any agreeing store (matching evaluator and failure flag), provided every `init`
 target of `c` is undefined in the target, with the post-stores agreeing and the
 failure flags / evaluators equal. -/
 theorem cmd_replay_agreement_storeAgree {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
-    [HasIdent P] [HasVarsPure P P.Expr] [DecidableEq P.Ident] [LawfulHasIdent P]
+    [HasIdent P] [DecidableEq P.Ident] [LawfulHasIdent P]
     (extendFactory : ExtendFactory P)
     (c : Cmd P) (ρ_src ρ_src' ρ_tgt : Env P)
     (h_eval_eq : ρ_tgt.factory = ρ_src.factory)
@@ -652,7 +655,7 @@ distinctive to that lemma. -/
 /-- Deterministic-loop iteration. -/
 private theorem nondetElim_loop_det_sim_iteration_sa {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (extendFactory : ExtendFactory P)
@@ -962,7 +965,7 @@ immediately: the resulting stores still agree and every `Q`-name stays fresh.
 (The nondet-loop EXIT case; used by both fuel cases of the iteration lemma.) -/
 private theorem loop_nondet_exit_close_sa {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (extendFactory : ExtendFactory P)
@@ -985,7 +988,7 @@ private theorem loop_nondet_exit_close_sa {P : PureExpr} [HasFvar P] [HasFvars P
     (∀ t, Q t →
         ρ'.store (HasIdent.ident (P := P) t) = none)
       ∧ ∃ ρ_out, StepStmtStar P (EvalCmd P) extendFactory
-          (.stmt (.loop (.det (HasFvar.mkFvar ident)) m inv
+          (.stmt (.loop (.det (HasFvar.mkTypedFvar ident HasBool.boolTy)) m inv
             (body' ++ [.cmd (HasHavoc.havoc ident md)]) md) ρ_tgt)
           (Env.outcomeConfig oc ρ_out)
         ∧ StoreAgreement ρ'.store ρ_out.store
@@ -1004,9 +1007,9 @@ private theorem loop_nondet_exit_close_sa {P : PureExpr} [HasFvar P] [HasFvars P
       match hrest with
       | .refl _ => rfl
       | .step _ _ _ h _ => exact nomatch h
-    have h_guard_ff : P.eval ρ_tgt.factory ρ_tgt.store (HasFvar.mkFvar ident) = some HasBool.ff := by
+    have h_guard_ff : P.eval ρ_tgt.factory ρ_tgt.store (HasFvar.mkTypedFvar ident HasBool.boolTy) = some HasBool.ff := by
       rw [h_eval_eq]
-      exact eval_mkFvar_of_value ρ_src.factory ρ_tgt.store ident HasBool.ff
+      exact eval_mkTypedFvar_of_value ρ_src.factory ρ_tgt.store ident HasBool.ff
         (HasBool.boolIsVal ρ_src.factory).2 h_guard_def hwf.var hwf.mono
     subst hρ'_eq
     refine ⟨h_src_fresh, ρ_tgt, ?_, ?_, ?_, ?_, ?_⟩
@@ -1020,7 +1023,7 @@ private theorem loop_nondet_exit_close_sa {P : PureExpr} [HasFvar P] [HasFvars P
 /-- Nondeterministic-loop iteration (fuel-bounded induction on the source run). -/
 private theorem nondetElim_loop_nondet_sim_iteration_sa {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (extendFactory : ExtendFactory P)
@@ -1074,7 +1077,7 @@ private theorem nondetElim_loop_nondet_sim_iteration_sa {P : PureExpr} [HasFvar 
     (∀ t, Q t →
         ρ'.store (HasIdent.ident (P := P) t) = none)
       ∧ ∃ ρ_out, StepStmtStar P (EvalCmd P) extendFactory
-          (.stmt (.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+          (.stmt (.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
             inv
             (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md) ρ_tgt)
           (Env.outcomeConfig oc ρ_out)
@@ -1104,11 +1107,11 @@ private theorem nondetElim_loop_nondet_sim_iteration_sa {P : PureExpr} [HasFvar 
         h_src_fresh h_tgt_fresh h_guard_def hrest
     · subst h_ent
       simp only [if_true] at h_guard_def
-      -- Guard reads tt in target (via mkFvar / h_guard_def).
-      have h_guard_tt : P.eval ρ_tgt.factory ρ_tgt.store (HasFvar.mkFvar (HasIdent.ident (P := P) g))
+      -- Guard reads tt in target (via mkTypedFvar / h_guard_def).
+      have h_guard_tt : P.eval ρ_tgt.factory ρ_tgt.store (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)
           = some HasBool.tt := by
         rw [h_eval_eq]
-        exact eval_mkFvar_of_value ρ_src.factory ρ_tgt.store (HasIdent.ident (P := P) g) HasBool.tt
+        exact eval_mkTypedFvar_of_value ρ_src.factory ρ_tgt.store (HasIdent.ident (P := P) g) HasBool.tt
           (HasBool.boolIsVal ρ_src.factory).1 h_guard_def hwf.var hwf.mono
       have hwf_var_t : WellFormedSemanticEvalVar ρ_tgt.factory := h_eval_eq ▸ hwf.var
       cases oc with
@@ -1498,7 +1501,7 @@ private theorem nondetElim_loop_nondet_sim_iteration_sa {P : PureExpr} [HasFvar 
               (block_inner_star P (EvalCmd P) extendFactory _ _ .none ρ_tgt.store ρ_tgt.factory h_body_tail) ?_
             exact .step _ _ _ StepStmt.step_block_done (.refl _)
           have h_loop_stmts_exit : StepStmtStar P (EvalCmd P) extendFactory
-              (.stmts [.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+              (.stmts [.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
                 inv
                 (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md] ρ_tgt_next)
               (.exiting lbl ρ_out) := by
@@ -1655,7 +1658,7 @@ mutual
 /-- Per-statement engine (mutual with `nondetElim_simulation_gen_sa`). -/
 private theorem nondetElim_stmt_gen_sa {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (hQgen : (∀ sg, Q (StringGenState.gen ndelimItePrefix sg).1)
@@ -2254,7 +2257,7 @@ private theorem nondetElim_stmt_gen_sa {P : PureExpr} [HasFvar P] [HasFvars P] [
         ((∀ t, Q t →
             ρ'.store (HasIdent.ident (P := P) t) = none)
           ∧ ∃ ρ_out, StepStmtStar P (EvalCmd P) extendFactory
-              (.stmt (.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+              (.stmt (.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
                 inv
                 ((Block.nondetElimM body σ₁).1 ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md)
                 ({ ρ_tgt with store := SemanticStore.update ρ_tgt.store (HasIdent.ident (P := P) g) b } : Env P))
@@ -2391,7 +2394,7 @@ private theorem nondetElim_stmt_gen_sa {P : PureExpr} [HasFvar P] [HasFvars P] [
 `nondetElim_stmt_gen_sa`). -/
 private theorem nondetElim_simulation_gen_sa {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (hQgen : (∀ sg, Q (StringGenState.gen ndelimItePrefix sg).1)
@@ -2577,7 +2580,7 @@ corollary.  It instantiates `nondetElim_simulation_gen_sa` at `ρ_tgt = ρ_src` 
 the empty generator state. -/
 private theorem nondetElim_simulation {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (hQgen : (∀ sg, Q (StringGenState.gen ndelimItePrefix sg).1)
@@ -2614,7 +2617,7 @@ Identical to the terminal `nondetElim_simulation` except it instantiates the
 outcome selector at `some lbl`. -/
 private theorem nondetElim_simulation_exit {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (hQgen : (∀ sg, Q (StringGenState.gen ndelimItePrefix sg).1)
@@ -2658,7 +2661,7 @@ freshness, and the source block-shape predicates) that the sibling pass
 proofs are stated over. -/
 theorem nondetElim_sound {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     (extendFactory : ExtendFactory P)
     (ss : List (Stmt P (Cmd P))) (ρ₀ ρ' : Env P)
@@ -2760,14 +2763,14 @@ theorem Block.nondetElimM_cons_state [HasIdent P] [HasFvar P] [HasFvars P] [HasB
   simp only [h₁, h₂]
 
 /-- An `init` command modifies nothing (it *defines*, not modifies). -/
-private theorem init_modVars (x : P.Ident) (ty : P.Ty) (e : ExprOrNondet P)
+private theorem init_modVars [HasFvars P] (x : P.Ident) (ty : P.Ty) (e : ExprOrNondet P)
     (md : MetaData P) :
     HasVarsImp.modifiedVars (HasInit.init (CmdT := Cmd P) x ty e md) =
       ([] : List P.Ident) := by
   with_unfolding_all rfl
 
 /-- A `havoc x` command modifies exactly `[x]`. -/
-private theorem havoc_modVars (x : P.Ident) (md : MetaData P) :
+private theorem havoc_modVars [HasFvars P] (x : P.Ident) (md : MetaData P) :
     HasVarsImp.modifiedVars (HasHavoc.havoc (CmdT := Cmd P) x md) = [x] := by
   with_unfolding_all rfl
 
@@ -2981,7 +2984,7 @@ which is what lets a composition partner — e.g. one that generates under a dis
 prefix — satisfy it vacuously. -/
 theorem nondetElim_sound_kind {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     (extendFactory : ExtendFactory P)
     (ss : List (Stmt P (Cmd P))) (ρ₀ ρ' : Env P)
@@ -3010,7 +3013,7 @@ and the failure flag.  A thin forwarder to `nondetElim_simulation_exit`; the
 freshness fact the simulation consumes. -/
 theorem nondetElim_sound_kind_exit {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     (extendFactory : ExtendFactory P)
     (ss : List (Stmt P (Cmd P))) (ρ₀ ρ' : Env P)
@@ -3045,7 +3048,7 @@ again store-agreeing (the `ndelimKind`-keyed compositional soundness the
 overapproximation instance consumes). -/
 theorem nondetElim_sound_kind_compositional {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     (extendFactory : ExtendFactory P)
     (ss : List (Stmt P (Cmd P))) (ρ₀ ρ' ρ_tgt : Env P)
@@ -3076,7 +3079,7 @@ theorem nondetElim_sound_kind_compositional {P : PureExpr} [HasFvar P] [HasFvars
 /-- Escaping companion of `nondetElim_sound_kind_compositional`. -/
 theorem nondetElim_sound_kind_exit_compositional {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     (extendFactory : ExtendFactory P)
     (ss : List (Stmt P (Cmd P))) (ρ₀ ρ' ρ_tgt : Env P)
@@ -3130,7 +3133,7 @@ relation, so only the input side is re-threaded; `h_body_sim` is the `_sa`
 terminal body simulation. -/
 private theorem nondetElim_loop_det_to_fail_iteration_sa {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (extendFactory : ExtendFactory P)
@@ -3333,7 +3336,7 @@ agreement composes `StoreAgreement.of_projectStore_parents` with
 `storeAgreement_storeWith` for the freshly-havoced gen guard slot. -/
 private theorem nondetElim_loop_nondet_to_fail_iteration_sa {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (extendFactory : ExtendFactory P)
@@ -3398,7 +3401,7 @@ private theorem nondetElim_loop_nondet_to_fail_iteration_sa {P : PureExpr} [HasF
             [.loop .nondet m inv body md]) a'),
         hrest.len ≤ n)) :
     ∃ d, StepStmtStar P (EvalCmd P) extendFactory
-        (.stmt (.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+        (.stmt (.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
           inv
           (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md) ρ_tgt) d
       ∧ d.getEnv.hasFailure = true := by
@@ -3409,7 +3412,7 @@ private theorem nondetElim_loop_nondet_to_fail_iteration_sa {P : PureExpr} [HasF
         reflTransT_from_terminal P extendFactory hrest
       rw [ha'_eq] at h_a'_fail
       have : ρ_src.hasFailure = true := by simpa [Config.getEnv, Bool.or_false] using h_a'_fail
-      exact ⟨.stmt (.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+      exact ⟨.stmt (.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
         inv
         (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md) ρ_tgt, .refl _,
         by simpa [Config.getEnv] using (h_fail_eq.trans this)⟩
@@ -3422,7 +3425,7 @@ private theorem nondetElim_loop_nondet_to_fail_iteration_sa {P : PureExpr} [HasF
       rw [ha'_eq] at h_a'_fail
       have : ρ_src.hasFailure = true := by
         simpa [Config.getEnv, Bool.or_false] using h_a'_fail
-      exact ⟨.stmt (.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+      exact ⟨.stmt (.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
         inv
         (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md) ρ_tgt, .refl _,
         by simpa [Config.getEnv] using (h_fail_eq.trans this)⟩
@@ -3432,24 +3435,24 @@ private theorem nondetElim_loop_nondet_to_fail_iteration_sa {P : PureExpr} [HasF
         reflTransT_from_terminal P extendFactory hrest
       rw [ha'_eq] at h_a'_fail
       have : ρ_src.hasFailure = true := by simpa [Config.getEnv, Bool.or_false] using h_a'_fail
-      exact ⟨.stmt (.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+      exact ⟨.stmt (.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
         inv
         (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md) ρ_tgt, .refl _,
         by simpa [Config.getEnv] using (h_fail_eq.trans this)⟩
     · subst h_ent
       simp only [if_true] at h_guard_def
-      have h_guard_tt : P.eval ρ_tgt.factory ρ_tgt.store (HasFvar.mkFvar (HasIdent.ident (P := P) g))
+      have h_guard_tt : P.eval ρ_tgt.factory ρ_tgt.store (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)
           = some HasBool.tt := by
         rw [h_eval_eq]
-        exact eval_mkFvar_of_value ρ_src.factory ρ_tgt.store (HasIdent.ident (P := P) g) HasBool.tt
+        exact eval_mkTypedFvar_of_value ρ_src.factory ρ_tgt.store (HasIdent.ident (P := P) g) HasBool.tt
           (HasBool.boolIsVal ρ_src.factory).1 h_guard_def hwf.var hwf.mono
       have h_step_enter : StepStmtStar P (EvalCmd P) extendFactory
-          (.stmt (.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+          (.stmt (.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
             inv
             (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md) ρ_tgt)
           (.seq (.block .none ρ_tgt.store ρ_tgt.factory (.stmts (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)])
             ρ_tgt))
-            [.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m inv
+            [.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m inv
               (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md]) :=
         .step _ _ _ (StepStmt.step_loop_enter
           h_guard_tt (h_eval_eq ▸ hwf.bool)) (.refl _)
@@ -3473,7 +3476,7 @@ private theorem nondetElim_loop_nondet_to_fail_iteration_sa {P : PureExpr} [HasF
             (.block .none ρ_tgt.store ρ_tgt.factory d'') :=
           block_inner_star P (EvalCmd P) extendFactory _ _ .none ρ_tgt.store ρ_tgt.factory h_body_tail_fail
         refine ⟨.seq (.block .none ρ_tgt.store ρ_tgt.factory d'')
-          [.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m inv
+          [.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m inv
             (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md],
           ReflTrans_Transitive _ _ _ _ h_step_enter
             (seq_inner_star P (EvalCmd P) extendFactory _ _ _ h_blk_tgt), ?_⟩
@@ -3516,7 +3519,7 @@ private theorem nondetElim_loop_nondet_to_fail_iteration_sa {P : PureExpr} [HasF
                     [.loop .nondet m inv body md]) d_loop),
                 hr.len ≤ n)) →
             ∃ d, StepStmtStar P (EvalCmd P) extendFactory
-                (.stmt (.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+                (.stmt (.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
                   inv
                   (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md) ρ_tgt) d
               ∧ d.getEnv.hasFailure = true := by
@@ -3588,7 +3591,7 @@ private theorem nondetElim_loop_nondet_to_fail_iteration_sa {P : PureExpr} [HasF
               (block_inner_star P (EvalCmd P) extendFactory _ _ .none ρ_tgt.store ρ_tgt.factory h_body_tail) ?_
             exact .step _ _ _ StepStmt.step_block_done (.refl _)
           have h_run_recurse_stmts : StepStmtStar P (EvalCmd P) extendFactory
-              (.stmts [.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m
+              (.stmts [.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m
                 inv
                 (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md] ρ_tgt_next)
               (.seq d ([] : List (Stmt P (Cmd P)))) :=
@@ -3621,7 +3624,7 @@ private theorem nondetElim_loop_nondet_to_fail_iteration_sa {P : PureExpr} [HasF
               (.block .none ρ_tgt.store ρ_tgt.factory d'') :=
             block_inner_star P (EvalCmd P) extendFactory _ _ .none ρ_tgt.store ρ_tgt.factory h_body_tail_fail
           refine ⟨.seq (.block .none ρ_tgt.store ρ_tgt.factory d'')
-            [.loop (.det (HasFvar.mkFvar (HasIdent.ident (P := P) g))) m inv
+            [.loop (.det (HasFvar.mkTypedFvar (HasIdent.ident (P := P) g) HasBool.boolTy)) m inv
               (body' ++ [.cmd (HasHavoc.havoc (HasIdent.ident (P := P) g) md)]) md],
             ReflTrans_Transitive _ _ _ _ h_step_enter
               (seq_inner_star P (EvalCmd P) extendFactory _ _ _ h_blk_tgt), ?_⟩
@@ -3634,7 +3637,7 @@ mutual
 simulation and the `_sa` failing-iteration engine. -/
 private theorem nondetElim_stmt_to_fail_gen_sa {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (hQgen : (∀ sg, Q (StringGenState.gen ndelimItePrefix sg).1)
@@ -4103,7 +4106,7 @@ tail's init-target undefinedness at the advanced target via
 `initVars`-classification + head/tail disjointness. -/
 private theorem nondetElim_to_fail_gen_sa {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (hQgen : (∀ sg, Q (StringGenState.gen ndelimItePrefix sg).1)
@@ -4240,7 +4243,7 @@ failing configuration of `Block.nondetElim ss` (same `ρ₀`, no endpoint demand
 Instantiates the gen-level `_to_fail` at `ρ_tgt = ρ₀` and the empty generator. -/
 private theorem nondetElim_simulation_to_fail {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     {Q : String → Prop}
     (hQgen : (∀ sg, Q (StringGenState.gen ndelimItePrefix sg).1)
@@ -4273,7 +4276,7 @@ terminal soundness theorems already consume, so it composes into the
 structured-pass failing bridge identically. -/
 theorem nondetElim_to_fail {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     (extendFactory : ExtendFactory P)
     (ss : List (Stmt P (Cmd P))) (ρ₀ : Env P) (c : Config P (Cmd P))
@@ -4299,7 +4302,7 @@ config of `ss` (run from `ρ₀`) is matched by a reachable failing config of
 `nondetElim_to_fail_gen_sa` at `σ := .emp`, `Q := ndelimKind`. -/
 theorem nondetElim_to_fail_compositional {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
     [HasIdent P] [HasInt P] [HasIntOps P]
-    [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P]
     (extendFactory : ExtendFactory P)
     (ss : List (Stmt P (Cmd P))) (ρ₀ ρ_tgt : Env P) (c : Config P (Cmd P))
@@ -4428,7 +4431,7 @@ factory triple (the shared `EnvStoreAgree`).  Terminal / exiting reuse the
 `nondetElim_sound_kind*_compositional` sims and `CanFail` reuses
 `nondetElim_to_fail_compositional`, at the diagonal `ρ_tgt := ρ₀`. -/
 section NondetElimOverapprox
-open Specification Specification.Transform
+open Specification Specification.Transform Imperative.Logic
 
 /-- `Block.nondetElim` overapproximates its source up to `EnvStoreAgree`: for a
 block that is func-decl-free, has unique inits, and never writes an `ndelimKind`
@@ -4440,7 +4443,7 @@ target state.  Terminal / exiting cases discharge via the
 preserved since `nondetElim` keeps `noFuncDecl`); the target `initEnvWF` classifies
 the output `initVars` via `nondetElimM_initVars_classified_Q`. -/
 theorem nondetElim_overapproximates_upto_local {P : PureExpr} [HasFvar P] [HasFvars P] [HasBoolOps P]
-    [HasIdent P] [HasInt P] [HasIntOps P] [HasVarsPure P P.Expr] [DecidableEq P.Ident]
+    [HasIdent P] [HasInt P] [HasIntOps P] [DecidableEq P.Ident]
     [LawfulHasFvar P] [LawfulHasIdent P] [HasSubstFvar P] (extendFactory : ExtendFactory P) :
     Specification.Transform.OverapproximatesUptoWhen
       (· = ·)

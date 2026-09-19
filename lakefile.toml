@@ -21,6 +21,24 @@ rev = "bump_to_v4.29.0-rc8"
 name = "Strata"
 moreLeancArgs = ["-fbracket-depth=512"]
 
+# Editor syntax-highlighting generator, factored out of `editors/GenSyntax.lean`
+# so `StrataTest.EditorSyntaxFreshness` can reuse it for the freshness check.
+# `srcDir` points at `editors/` so the module resolves to `editors/CoreSyntaxGen.lean`.
+[[lean_lib]]
+name = "CoreSyntaxGen"
+srcDir = "editors"
+globs = ["CoreSyntaxGen"]
+
+# One top-level directory groups the Laurel implementation, scripts and tests.
+[[lean_lib]]
+name = "StrataLaurel"
+roots = ["StrataLaurel.Implementation"]
+
+[[lean_lib]]
+name = "StrataLaurelTest"
+roots = []
+globs = ["StrataLaurel.Tests.+"]
+
 [[lean_lib]]
 name = "StrataExamples"
 globs = ["Examples.Lean.+"]
@@ -37,7 +55,7 @@ root = "Scripts.StrataTestMain"
 # modules from the `Strata` library that are not in `StrataTest`'s transitive
 # closure (e.g., `Strata.Java.Gen`), so without this the oleans would be
 # missing when running `lake test` from a clean `.lake`.
-needs = ["Strata", "StrataTest", "laurelJavaGen"]
+needs = ["Strata", "StrataLaurel", "StrataTest", "StrataLaurelTest", "laurelJavaGen"]
 
 [[lean_exe]]
 name = "StrataToCBMC"
@@ -59,4 +77,4 @@ root = "Scripts.GenerateEmbedded"
 
 [[lean_exe]]
 name = "laurelJavaGen"
-root = "Scripts.LaurelJavaGen"
+root = "StrataLaurel.Scripts.LaurelJavaGen"

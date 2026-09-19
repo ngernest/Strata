@@ -5,9 +5,9 @@
 -/
 module
 
-import Strata.Transform.LoopElim
-import Strata.Transform.InsertLoopInvariantAsserts
 import Strata.Languages.Core.ObligationExtraction
+import Strata.Transform.InsertLoopInvariantAsserts
+import Strata.Transform.LoopElim
 public import Strata.Languages.C_Simp.C_Simp
 public import Strata.Languages.Core.SMTEncoder
 import Std.Tactic.BVDecide.Normalize.Prop
@@ -75,27 +75,37 @@ abbrev CoreVC := Env × Imperative.ProofObligation Expression
 abbrev coreVCs := List (Env × Imperative.ProofObligation Expression)
 
 def genVCs (program : Program) (options : VerifyOptions := .default) : Option coreVCs := do
-  let transform : Transform.CoreTransformM (Bool × Program) := do
-    let (_, program') ← insertLoopInvariantAsserts program
-    loopElim program'
-  let (res, _) := StateT.run (ExceptT.run transform) Transform.CoreTransformState.emp
-  let (_, program) ← res.toOption
-  match Core.typeCheck options program with
+  -- Boole programs arrive with structured bodies and no calls; add loop phases
+  -- before the shared preSymbolicEvalPipelinePhases.
+  let phases := [insertLoopInvariantAssertsPipelinePhase, loopElimPipelinePhase]
+                  ++ preSymbolicEvalPipelinePhases options
+  -- Validate phase composition from Boole's guaranteed invariants (structured
+  -- bodies, no calls, no internal func decls).
+  let _ ← (ValidatedPipeline.ofListFrom
+              (factSet![.noCFGBodies, .noCalls, .noInternalFuncDecl]) phases).toOption
+  -- The factory is seeded with Core.Factory so monomorphizeFunctions can look
+  -- up built-in polymorphic functions.
+  let initState := { Transform.CoreTransformState.emp with factory := Core.Factory }
+  let (monoProgram, monoState) ←
+    phases.foldlM (init := (program, initState)) fun (prog, state) pp =>
+      let (result, newState) :=
+        Transform.runWith prog (fun q => do let (_, q') ← pp.transform q; return q') state
+      result.toOption.map fun q' => (q', newState)
+  -- symbolicEval (toCoreProofObligationProgram) runs separately so we can keep
+  -- monoProgram for buildEnv, which needs the pre-symbolic-evaluation program.
+  match Core.toCoreProofObligationProgram options monoProgram with
   | .error _ => none
-  | .ok tcProgram =>
-    match Core.toCoreProofObligationProgram options tcProgram with
+  | .ok (oblProgram, _stats) =>
+    match Core.ObligationExtraction.extractObligations oblProgram with
     | .error _ => none
-    | .ok (oblProgram, _stats) =>
-      match Core.ObligationExtraction.extractObligations oblProgram with
-      | .error _ => none
-      | .ok obligations =>
-        let E := match Core.buildEnv options tcProgram Core.Factory with
-          | .ok (initE, _) =>
-            match Program.eval initE with
-            | .ok (pEs, _) => pEs.head?.getD initE
-            | .error _ => initE
-          | .error _ => Env.init (empty_factory := true)
-        return obligations.toList.map (fun ob => (E, ob))
+    | .ok obligations =>
+      let E := match Core.buildEnv options monoProgram monoState.factory with
+        | .ok (initE, _) =>
+          match Program.eval initE with
+          | .ok (pEs, _) => pEs.head?.getD initE
+          | .error _ => initE
+        | .error _ => Env.init (empty_factory := true)
+      return obligations.toList.map (fun ob => (E, ob))
 
 end Core
 
@@ -169,10 +179,12 @@ def Core.ProofObligation.toSMTObligation (E : Core.Env) (ob : Imperative.ProofOb
     -- Seed the encoding context with the env's datatypes and the array-theory flag.
     let smtCtx := { Core.SMT.Context.default with
       datatypes := .ofFactory E.datatypes, useArrayTheory := options.useArrayTheory }
-    let maybeTerms := Core.ProofObligation.toSMTTerms E.factory ob smtCtx
+    -- Encode this single obligation from a fresh encoder state.
+    let encState : Core.SMTEncodeState := .init { ctx := smtCtx }
+    let maybeTerms := Core.encodeObligationToSMT E.factory encState ob
     match maybeTerms with
     | .error _ => none
-    | .ok (ts, varDefs, _varDecls, t, ctx, _stats) =>
+    | .ok ({ assumptions := ts, varDefs, goal := t, ctx, .. }, _) =>
       -- For denotational semantics, variable definitions are equivalent to equalities
       let defAssumptions := varDefs.map fun d =>
         Strata.SMT.Factory.eq (.app (.uf ⟨d.name, [], d.ty⟩) [] d.ty) d.body
@@ -381,7 +393,13 @@ private unsafe def genSMTVCsUnsafe (mv : MVarId) : MetaM (List MVarId) := do
   trace[debug] m!"Created {mvs.length} SMT VC goals: {mvs}"
   let ps ← mvs.mapM MVarId.getType
   let hP := andNIntro (List.zip ps (mvs.map Expr.mvar))
-  mv.assign hP
+  let mvType ← mv.getType
+  let bridgeType := Lean.Expr.forallE `h (andN ps) mvType .default
+  let bridgeName ← Lean.mkAuxDeclName `_genSMTVCs_tcbBridge
+  Lean.addDecl (Declaration.axiomDecl {
+    name := bridgeName, levelParams := [], type := bridgeType, isUnsafe := false
+  })
+  mv.assign (mkApp (.const bridgeName []) hP)
   return mvs
 
 @[implemented_by genSMTVCsUnsafe]

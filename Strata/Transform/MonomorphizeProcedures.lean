@@ -118,7 +118,7 @@ private def genOpaqueTypeName (procName tyVar : String) : CoreGenM CoreIdent :=
     type parameters is returned unchanged. -/
 def monomorphizeProc (proc : Procedure) (md : MetaData Expression) :
     CoreTransformM (List Decl) := do
-  let tyVars := proc.header.typeArgs.dedup
+  let tyVars := proc.header.typeArgs.uniq
   if tyVars.isEmpty then
     return [Decl.proc proc md]
   else
@@ -140,8 +140,26 @@ def run (p : Program) : CoreTransformM Program := do
   let out ← p.decls.foldlM (init := (#[] : Array Decl)) fun acc decl => do
     match decl with
     | .proc proc md =>
-      let contrib ← monomorphizeProc proc md
-      pure (acc ++ contrib.toArray)
+      if proc.header.typeArgs.isEmpty then
+        -- Skip: nothing to substitute.  The structural guards (`.noCalls`,
+        -- `.noCFGBodies`) protect the substitution step, which is only applied
+        -- to polymorphic procedures; passing a non-polymorphic procedure through
+        -- unchanged is always safe regardless of its body or call sites.
+        pure (acc.push decl)
+      else
+        match proc.body with
+        | .cfg _ =>
+          throw (Strata.Message.fromFormat
+            f!"❌ MonomorphizeProcedures: procedure {proc.header.name.name} has a CFG \
+               body; monomorphization only handles structured bodies.")
+        | .structured ss =>
+          if !(Statements.noCalls ss) then
+            throw (Strata.Message.fromFormat
+              f!"❌ MonomorphizeProcedures: procedure {proc.header.name.name} still \
+                 contains a call; eliminate calls before monomorphizing.")
+          else
+            let contrib ← monomorphizeProc proc md
+            pure (acc ++ contrib.toArray)
     | _ => pure (acc.push decl)
   return { decls := out.toList }
 
@@ -160,8 +178,18 @@ def monomorphizeProcedures (p : Program) : CoreTransformM (Bool × Program) := d
     opaque type is universal generalization (∀-introduction), which preserves
     the proof obligation and introduces no spurious models. -/
 def monomorphizeProceduresPipelinePhase : PipelinePhase :=
-  modelPreservingPipelinePhase "monomorphizeProcedures" fun prog =>
-    monomorphizeProcedures prog
+  -- Monomorphizing each procedure on its own is sound only once no body
+  -- contains a call, which is why `noCalls` is required and not merely
+  -- convenient.
+  modelPreservingPipelinePhase "monomorphizeProcedures"
+    (requires := factSet![.noCFGBodies, .noCalls])
+    (establishes := factSet![.noPolymorphicProcedures])
+    (preserves := factSet![.noCFGBodies, .noCalls, .noLoops, .noLoopInvariants,
+                         .noLoopMeasures, .staticSingleAssignment,
+                         .noBetaRedexes, .noPrecondsFromFuncs, .noNondetGuards,
+                         .noInternalFuncDecl, .noPolymorphicFunctions, .typeAnnotated])
+    fun prog =>
+      monomorphizeProcedures prog
 
 end Core
 

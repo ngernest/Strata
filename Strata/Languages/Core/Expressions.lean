@@ -38,9 +38,6 @@ abbrev Expression : PureExpr :=
 instance : HasFvars Expression where
   getFvars := Lambda.LExpr.LExpr.getVars
 
-instance : HasVarsPure Expression Expression.Expr where
-  getVars := Lambda.LExpr.LExpr.getVars
-
 instance : HasOps Expression where
   getOps := Lambda.LExpr.getOps
 
@@ -56,6 +53,9 @@ instance : HasVal Core.Expression where
 
 instance : HasFvar Core.Expression where
   mkFvar := (.fvar () · none)
+  -- A Core variable's annotation is a monomorphic type, so a polymorphic one
+  -- annotates nothing: `toMonoType?` yields `none` and the variable stays bare.
+  mkTypedFvar := fun v ty => .fvar () v ty.toMonoType?
   getFvar
   | .fvar _ v _ => some v
   | _ => none
@@ -72,9 +72,12 @@ operations, independent of the evaluator: `mkFvar`/`getFvars`/`ident`
 agree with the abstract `Lawful*` contracts. -/
 instance : LawfulHasFvar Core.Expression where
   getFvar_mkFvar := fun _ => rfl
+  getFvar_mkTypedFvar := fun _ _ => rfl
 
 instance : LawfulHasFvars Core.Expression where
   mkFvar_getFvars := fun _ => by
+    simp [HasFvars.getFvars, Lambda.LExpr.LExpr.getVars]
+  mkTypedFvar_getFvars := fun _ _ => by
     simp [HasFvars.getFvars, Lambda.LExpr.LExpr.getVars]
 
 instance : LawfulHasIdent Core.Expression where

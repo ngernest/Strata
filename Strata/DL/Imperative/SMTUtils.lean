@@ -243,18 +243,31 @@ def solverResult {P : PureExpr} [ToFormat P.Ident]
       t != "sat" && t != "unsat" && t != "unknown" && !t.isEmpty)
     "\n".intercalate rest
 
+  -- Parse the model that follows a sat/unknown verdict, falling back to the
+  -- given default on any error.
+  let parseFollowingModel (rest : String) (default : Result P.Ident) :
+      IO (Result P.Ident) := do
+    let rawModel ← parseModelDDM rest
+    match processModel typedVarToSMTFn vars rawModel E with
+    | .ok model =>
+      match default with
+      | .sat _     => return .sat model
+      | .unknown _ => return .unknown (some model)
+      | other      => return other
+    | .error _ => return default
+
   let parseVerdict (input : String) : IO (Option (Result P.Ident × String)) := do
     let pos := input.find (· == '\n')
     let verdict := input.extract input.startPos pos |>.trimAscii.toString
     let rest := (input.extract pos input.endPos |>.drop 1).toString
     match verdict with
     | "sat" =>
-      let rawModel ← parseModelDDM rest
-      match (processModel typedVarToSMTFn vars rawModel E) with
-      | .ok model => return some (.sat model, skipToNextVerdict rest)
-      | .error _ => return some (.sat [], skipToNextVerdict rest)
+      let r ← parseFollowingModel rest (.sat [])
+      return some (r, skipToNextVerdict rest)
     | "unsat" => return some (.unsat, skipToNextVerdict rest)
-    | "unknown" => return some (.unknown, skipToNextVerdict rest)
+    | "unknown" =>
+      let r ← parseFollowingModel rest .unknown
+      return some (r, skipToNextVerdict rest)
     | _ => return none
 
   let mkError (output : IO.Process.Output) : SolverError :=
@@ -319,12 +332,22 @@ def dischargeObligationIncremental {P : PureExpr} [ToFormat P.Ident] [BEq P.Iden
   let action : Strata.SMT.IncrementalSolverM
       (Except SolverError (Result P.Ident × Result P.Ident × Strata.SMT.EncoderState)) := do
     let solver := Strata.SMT.IncrementalSolver.mkIncrementalSolver
-    let { obligationId, assumptionIds, estate } ← encodeDecl solver
-    let varIds := assumptionIds.map fun id => Strata.SMT.Term.var ⟨id, .bool⟩
+    let { obligationId, assumptionIds := _, estate } ← encodeDecl solver
+    -- Build SMT terms for the user-declared variables rather than the boolean
+    -- assumption IDs, so get-value returns their concrete values.
+    let userVarTerms : List Strata.SMT.Term :=
+      vars.filterMap fun (var, ty) =>
+        match typedVarToSMTFn var ty with
+        | .error _ => none
+        | .ok (smtName, termType) =>
+          let key : Strata.SMT.UF := { id := smtName, args := [], out := termType }
+          match estate.functions[key]? with
+          | none => none
+          | some encodedId => some (Strata.SMT.Term.var ⟨encodedId, termType⟩)
     let getModelForVars : Strata.SMT.IncrementalSolverM (Model P.Ident) := do
-      if varIds.isEmpty then return []
+      if userVarTerms.isEmpty then return []
       try
-        let pairs ← solver.getValue varIds
+        let pairs ← solver.getValue userVarTerms
         match pairs with
         | [(.prim (.string rawOutput), _)] =>
           let rawModel ← parseModelDDM rawOutput
@@ -334,28 +357,37 @@ def dischargeObligationIncremental {P : PureExpr} [ToFormat P.Ident] [BEq P.Iden
         | _ => return []
       catch _ => return []
     let decisionToResult (decision : Strata.SMT.Decision) :
-        Strata.SMT.IncrementalSolverM (Result P.Ident) := do
+        Strata.SMT.IncrementalSolverM (Except SolverError (Result P.Ident)) := do
       match decision with
-      | .sat => return .sat (← getModelForVars)
+      | .sat => return .ok (.sat (← getModelForVars))
       | .unknown =>
         let model ← getModelForVars
-        return if model.isEmpty then .unknown else .unknown (some model)
-      | .unsat => return .unsat
+        return .ok (if model.isEmpty then .unknown else .unknown (some model))
+      | .unsat => return .ok .unsat
+      | .timeout => return .error (.timeout "solver reported a timeout on the incremental check")
     let bothChecks := satisfiabilityCheck && validityCheck
     let mut satResult : Result P.Ident := .unknown
     let mut valResult : Result P.Ident := .unknown
     if bothChecks then
-      satResult ← decisionToResult (← solver.checkSatAssuming [obligationId])
+      match ← decisionToResult (← solver.checkSatAssuming [obligationId]) with
+      | .error e => solver.close; return .error e
+      | .ok r => satResult := r
       let negObligation ← solver.mkNot obligationId
-      valResult ← decisionToResult (← solver.checkSatAssuming [negObligation])
+      match ← decisionToResult (← solver.checkSatAssuming [negObligation]) with
+      | .error e => solver.close; return .error e
+      | .ok r => valResult := r
     else
       if satisfiabilityCheck then
         solver.assert obligationId
-        satResult ← decisionToResult (← solver.checkSat)
+        match ← decisionToResult (← solver.checkSat) with
+        | .error e => solver.close; return .error e
+        | .ok r => satResult := r
       else if validityCheck then
         let negObligation ← solver.mkNot obligationId
         solver.assert negObligation
-        valResult ← decisionToResult (← solver.checkSat)
+        match ← decisionToResult (← solver.checkSat) with
+        | .error e => solver.close; return .error e
+        | .ok r => valResult := r
     solver.close
     return .ok (satResult, valResult, estate)
   let (result, _) ← action.run solverState

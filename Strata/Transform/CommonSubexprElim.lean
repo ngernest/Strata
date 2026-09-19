@@ -320,7 +320,12 @@ def fuel (exprs : List Expression.Expr) : Nat :=
     indices starting at `startIdx`), rewrites the body to reference them, and
     prepends the declarations. Returns `none` when there is nothing to extract. -/
 def stmtRunCSEIter (body : Statements) (startIdx : Nat) : Option (Statements × Nat) :=
-  let targets := collectExprsToAbbreviate (Statements.collectExprs body)
+  -- A duplicate whose type is unknown is left alone: abbreviating it would name
+  -- it with an unannotated variable, which the SMT encoder cannot read. This is
+  -- what makes the `typeAnnotated` claim below true, and it makes the `none`
+  -- branch of `ty` unreachable.
+  let targets := (collectExprsToAbbreviate (Statements.collectExprs body)).filter
+    (fun (_, dup) => dup.typeOf.isSome)
   if targets.isEmpty then
     none
   else
@@ -347,7 +352,7 @@ def stmtRunCSEIter (body : Statements) (startIdx : Nat) : Option (Statements × 
 
 /-- Deduplicate a procedure's body by extracting common subexpressions into
     `var` declarations prepended to the body. Returns the modified body and
-    the next available dedup index. -/
+    the next available uniq index. -/
 def stmtRunCSE (body : Statements) (startIdx : Nat) : Statements × Nat :=
   -- For performance, maximize structural sharing of subexpressions up front, so
   -- the pointer-address hash cache hashes each distinct subterm exactly once
@@ -365,18 +370,21 @@ where
 
 /-- Deduplicate all procedures in a program. Returns the modified program
     and whether any changes were made. -/
-def runCSE (p : Program) : Transform.CoreTransformM (Bool × Program) :=
-  let (revDecls, _, changed) := p.decls.foldl (fun (acc, idx, changed) decl =>
+def runCSE (p : Program) : Transform.CoreTransformM (Bool × Program) := do
+  let (revDecls, _, changed) ← p.decls.foldlM (fun (acc, idx, changed) decl =>
     match decl with
     | .proc proc md =>
       match proc.body with
       | .structured ss =>
         let (body', idx') := stmtRunCSE ss idx
-        (.proc { proc with body := .structured body' } md :: acc, idx', changed || idx' > idx)
+        pure (.proc { proc with body := .structured body' } md :: acc, idx', changed || idx' > idx)
       | .cfg _ =>
-        -- CFG bodies are not transformed by CSE for now.
-        (.proc proc md :: acc, idx, changed)
-    | other => (other :: acc, idx, changed)
+        -- A CFG body cannot be walked here; reject it rather than silently
+        -- skipping.
+        throw (Strata.Message.fromFormat
+          f!"❌ CommonSubexprElim: procedure {proc.header.name.name} has a CFG body; \
+             common subexpressions can only be eliminated from structured bodies.")
+    | other => pure (other :: acc, idx, changed)
   ) ([], 0, false)
   return (changed, { decls := revDecls.reverse })
 
@@ -389,6 +397,18 @@ end Core.CSE
     changes the SMT encoding's shape and can affect whether the solver
     reaches a conclusive result. -/
 def Core.commonSubexprElimPhase : Core.PipelinePhase :=
+  -- Naming a shared subexpression replaces it with a variable, which puts no
+  -- abstraction in a function position, so `noBetaRedexes` survives the last
+  -- phase before the encoder.
   Core.modelPreservingPipelinePhase "commonSubexprElim" Core.CSE.runCSE
+    -- Abbreviating an expression is only sound if its value cannot change
+    -- between the definition and the uses, which is what
+    -- `staticSingleAssignment` gives.
+    (requires := factSet![.noCFGBodies, .staticSingleAssignment])
+    (preserves := factSet![.noCFGBodies, .noCalls, .noLoops, .noLoopInvariants,
+                         .noLoopMeasures, .staticSingleAssignment,
+                         .noBetaRedexes, .noPrecondsFromFuncs, .noNondetGuards,
+                         .noInternalFuncDecl, .noPolymorphicProcedures,
+                         .noPolymorphicFunctions, .typeAnnotated])
 
 end -- public section

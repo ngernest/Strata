@@ -316,6 +316,38 @@ def Block.mapExpr (fExpr : P.Expr → P.Expr) (mapCmd : C → C)
   termination_by (Block.sizeOf ss)
 end
 
+mutual
+/-- Monadic `Stmt.mapExpr`: apply `fExpr`/`mapCmd` threading a monad `M`. -/
+def Stmt.mapExprM {M : Type → Type} [Monad M] (fExpr : P.Expr → M P.Expr) (mapCmd : C → M C)
+    (s : Stmt P C) : M (Stmt P C) := do
+  match s with
+  | .cmd c => return .cmd (← mapCmd c)
+  | .block l ss md => return .block l (← Block.mapExprM fExpr mapCmd ss) md
+  | .ite (.det c) tss ess md =>
+    return .ite (.det (← fExpr c)) (← Block.mapExprM fExpr mapCmd tss)
+      (← Block.mapExprM fExpr mapCmd ess) md
+  | .ite .nondet tss ess md =>
+    return .ite .nondet (← Block.mapExprM fExpr mapCmd tss) (← Block.mapExprM fExpr mapCmd ess) md
+  | .loop (.det g) measure inv body md =>
+    return .loop (.det (← fExpr g)) (← measure.mapM fExpr)
+      (← inv.mapM (fun (l, e) => return (l, ← fExpr e))) (← Block.mapExprM fExpr mapCmd body) md
+  | .loop .nondet measure inv body md =>
+    return .loop .nondet (← measure.mapM fExpr)
+      (← inv.mapM (fun (l, e) => return (l, ← fExpr e))) (← Block.mapExprM fExpr mapCmd body) md
+  | .exit l md => return .exit l md
+  | .funcDecl decl md => return .funcDecl decl md
+  | .typeDecl tc md => return .typeDecl tc md
+  termination_by (Stmt.sizeOf s)
+
+/-- Monadic `Block.mapExpr`. -/
+def Block.mapExprM {M : Type → Type} [Monad M] (fExpr : P.Expr → M P.Expr) (mapCmd : C → M C)
+    (ss : Block P C) : M (Block P C) := do
+  match ss with
+  | [] => return []
+  | s :: rest => return (← Stmt.mapExprM fExpr mapCmd s) :: (← Block.mapExprM fExpr mapCmd rest)
+  termination_by (Block.sizeOf ss)
+end
+
 ---------------------------------------------------------------------
 
 /-! ### StripMetaData
@@ -352,9 +384,9 @@ end
 mutual
 /-- Get all variables accessed by `s`. -/
 @[expose]
-def Stmt.getVars [HasFvars P] [HasVarsPure P C] (s : Stmt P C) : List P.Ident :=
+def Stmt.getVars [HasFvars P] [HasVarsImp P C] (s : Stmt P C) : List P.Ident :=
   match s with
-  | .cmd cmd => HasVarsPure.getVars cmd
+  | .cmd cmd => HasVarsImp.readVars cmd
   | .block _ bss _ => Block.getVars bss
   | .ite cond tbss ebss _ => cond.getVars ++ Block.getVars tbss ++ Block.getVars ebss
   | .loop guard measure invariants bss _ =>
@@ -375,19 +407,11 @@ def Stmt.getVars [HasFvars P] [HasVarsPure P C] (s : Stmt P C) : List P.Ident :=
   | .typeDecl _ _ => []  -- Type declarations don't reference variables
 
 @[expose]
-def Block.getVars [HasFvars P] [HasVarsPure P C] (ss : Block P C) : List P.Ident :=
+def Block.getVars [HasFvars P] [HasVarsImp P C] (ss : Block P C) : List P.Ident :=
   match ss with
   | [] => []
   | s :: srest => Stmt.getVars s ++ Block.getVars srest
 end
-
-instance (P : PureExpr) [HasFvars P] [HasVarsPure P C]
-  : HasVarsPure P (Stmt P C) where
-  getVars := Stmt.getVars
-
-instance (P : PureExpr) [HasFvars P] [HasVarsPure P C]
-  : HasVarsPure P (Block P C) where
-  getVars := Block.getVars
 
 mutual
 /-- Get all operator/function names referenced by `s`.  Mirrors
@@ -499,12 +523,12 @@ def Block.modifiedOrDefinedVars [HasVarsImp P C] (ss : Block P C)
 mutual
 /-- Get all variables touched (modified, defined, or read) by the statement `s`. -/
 @[simp, expose]
-def Stmt.touchedVars [HasVarsImp P C] [HasFvars P] [HasVarsPure P C]
+def Stmt.touchedVars [HasVarsImp P C] [HasFvars P]
     (s : Stmt P C) : List P.Ident :=
   Stmt.modifiedOrDefinedVars s true ++ Stmt.getVars s
 
 @[simp, expose]
-def Block.touchedVars [HasVarsImp P C] [HasFvars P] [HasVarsPure P C]
+def Block.touchedVars [HasVarsImp P C] [HasFvars P]
     (ss : Block P C) : List P.Ident :=
   Block.modifiedOrDefinedVars ss true ++ Block.getVars ss
 end
@@ -565,12 +589,12 @@ mutual
     TODO: prove that `Statement.typeCheck` in
     `Strata/Languages/Core/StatementType.lean` guarantees this well-formedness. -/
 @[expose] def Stmt.defUseWellFormed [HasVarsImp P C] [HasFvars P] [HasOps P]
-    [HasOpsImp P C] [HasVarsPure P C] [DecidableEq P.Ident]
+    [HasOpsImp P C] [DecidableEq P.Ident]
     (definedVars : P.Ident → Bool) (declaredFuncs : P.Ident → Bool)
     (s : Stmt P C) : Bool :=
   match s with
   | .cmd c =>
-    (HasVarsPure.getVars (P := P) c).all (fun n => definedVars n) &&
+    (HasVarsImp.readVars (P := P) c).all (fun n => definedVars n) &&
     (HasVarsImp.modifiedVars (P := P) c).all (fun n => definedVars n) &&
     -- All fresh variable names that are being initialized in command c must not
     -- have existed in the already defined vars 'definedVars'. Otherwise, var
@@ -614,7 +638,7 @@ mutual
   | .typeDecl _ _ => true
 
 @[expose] def Block.defUseWellFormed [HasVarsImp P C] [HasFvars P] [HasOps P]
-    [HasOpsImp P C] [HasVarsPure P C] [DecidableEq P.Ident]
+    [HasOpsImp P C] [DecidableEq P.Ident]
     (definedVars : P.Ident → Bool) (declaredFuncs : P.Ident → Bool)
     (bss : Block P C) : Bool :=
   match bss with
@@ -630,13 +654,15 @@ mutual
 end
 
 
-instance (P : PureExpr) [HasVarsImp P C] : HasVarsImp P (Stmt P C) where
+instance (P : PureExpr) [HasFvars P] [HasVarsImp P C] : HasVarsImp P (Stmt P C) where
   definedVars := Stmt.definedVars
   modifiedVars := Stmt.modifiedVars
+  readVars := Stmt.getVars
 
-instance (P : PureExpr) [HasVarsImp P C] : HasVarsImp P (Block P C) where
+instance (P : PureExpr) [HasFvars P] [HasVarsImp P C] : HasVarsImp P (Block P C) where
   definedVars := Block.definedVars
   modifiedVars := Block.modifiedVars
+  readVars := Block.getVars
 
 ---------------------------------------------------------------------
 
@@ -738,55 +764,56 @@ variable. The flat-namespace CFG can simulate the structured semantics only
 when this holds — without uniqueness, structured `step_block_done` can
 project a name away that the structured semantics later reinitializes, a
 pattern the CFG cannot replicate. -/
-@[expose] def Block.uniqueInits (ss : List (Stmt P (Cmd P))) : Prop :=
+@[expose] def Block.uniqueInits [HasFvars P] (ss : List (Stmt P (Cmd P))) : Prop :=
   (Block.initVars ss).Nodup
 
 ---------------------------------------------------------------------
 
-/-! ### SimpleShape
+/-! ### NoNondetGuards
 
-Predicate stating that a statement or block has a "simple" shape suitable
-for the structured-to-CFG soundness proof under axiom-free assumptions:
-- no nondeterministic `.ite`
-- no nondeterministic `.loop` guards (only `.det _` loops are admitted)
-- `.loop` is permitted **provided its body is itself simple-shape**.
-  Auxiliary predicates `loopBodyNoInits`, `loopHasNoInvariants`, and
-  `noMeasureLoops` further restrict which loops are admissible for the
-  current proof scope (no body-local var inits, no labeled invariants,
-  no termination measure). Those predicates are defined below.
+Predicate stating that no `.ite` or `.loop` guard in a statement or block is
+`.nondet`, at any nesting depth. Two consumers need it: the
+structured-to-CFG soundness proof under axiom-free assumptions, and symbolic
+evaluation, which rejects a nondeterministic guard outright. Nondet
+elimination is what replaces such a guard with a fresh boolean and a
+deterministic branch.
 
-`.ite (.det _)`, `.block`, sequential `.cmd`s, `.exit`, `.funcDecl`,
-and `.typeDecl` are all allowed.
+Only guards are read, so the predicate is stated for any command type, and
+`.ite (.det _)`, `.block`, sequential `.cmd`s, `.exit`, `.funcDecl` and
+`.typeDecl` are all admitted. The auxiliary predicates `loopBodyNoInits`,
+`loopHasNoInvariants` and `noMeasureLoops` defined below restrict loops
+further for the proof's scope: no body-local variable inits, no labeled
+invariants, no termination measure.
 -/
 
 mutual
-/-- Returns true if the statement satisfies the simple-shape restriction. -/
-@[expose] def Stmt.simpleShape (s : Stmt P (Cmd P)) : Bool :=
+/-- Returns true if no guard in `s` is nondeterministic, at any nesting depth. -/
+@[expose] def Stmt.noNondetGuards (s : Stmt P C) : Bool :=
   match s with
   | .cmd _ => true
-  | .block _ bss _ => Block.simpleShape bss
-  | .ite (.det _) tss ess _ => Block.simpleShape tss && Block.simpleShape ess
+  | .block _ bss _ => Block.noNondetGuards bss
+  | .ite (.det _) tss ess _ => Block.noNondetGuards tss && Block.noNondetGuards ess
   | .ite .nondet _ _ _ => false
   | .loop guard _ _ bss _ =>
-    (match guard with | .det _ => true | .nondet => false) && Block.simpleShape bss
+    (match guard with | .det _ => true | .nondet => false) && Block.noNondetGuards bss
   | .exit _ _ => true
   | .funcDecl _ _ => true
   | .typeDecl _ _ => true
   termination_by (Stmt.sizeOf s)
 
-/-- Returns true if the block satisfies the simple-shape restriction. -/
-@[expose] def Block.simpleShape (ss : List (Stmt P (Cmd P))) : Bool :=
+/-- Is every guard in `ss` deterministic, at any nesting depth? -/
+@[expose] def Block.noNondetGuards (ss : List (Stmt P C)) : Bool :=
   match ss with
   | [] => true
-  | s :: srest => Stmt.simpleShape s && Block.simpleShape srest
+  | s :: srest => Stmt.noNondetGuards s && Block.noNondetGuards srest
   termination_by (Block.sizeOf ss)
 end
 
 /-!
-`transportShape` is a second shape walker, finer than `simpleShape`: it carves out
+`transportShape` is a second walker, finer than `noNondetGuards`: it carves out
 the fragment the loop-init hoist pass's body simulation can express (the same-name
 `StoreAgreement` body simulation in `Strata.Transform.LoopInitHoistCorrect`).
-Unlike `simpleShape`, which treats every `.cmd _` alike, `transportShape` inspects
+Unlike `noNondetGuards`, which treats every `.cmd _` alike, `transportShape` inspects
 the command — `init`/`set` are admitted with either a `.det` or `.nondet` rhs, and
 `.funcDecl` is rejected — and it admits a nested `.loop` only when it is
 measure-free, invariant-free, and `.det`-guarded (`.loop (.det _) none [] _`).
@@ -832,7 +859,7 @@ body declares no local variables.
 
 mutual
 /-- Returns true if every reachable loop's body declares no local vars. -/
-@[expose] def Stmt.loopBodyNoInits (s : Stmt P (Cmd P)) : Bool :=
+@[expose] def Stmt.loopBodyNoInits [HasFvars P] (s : Stmt P (Cmd P)) : Bool :=
   match s with
   | .cmd _ => true
   | .block _ bss _ => Block.loopBodyNoInits bss
@@ -845,13 +872,63 @@ mutual
   termination_by (Stmt.sizeOf s)
 
 /-- Block-level lifting of `Stmt.loopBodyNoInits`. -/
-@[expose] def Block.loopBodyNoInits (ss : List (Stmt P (Cmd P))) : Bool :=
+@[expose] def Block.loopBodyNoInits [HasFvars P] (ss : List (Stmt P (Cmd P))) : Bool :=
   match ss with
   | [] => true
   | s :: srest => Stmt.loopBodyNoInits s && Block.loopBodyNoInits srest
   termination_by (Block.sizeOf ss)
 end
 
+
+---------------------------------------------------------------------
+
+/-! ### AllSubstmts
+
+Lifts a predicate on a single statement to "holds of this statement and of
+every statement nested inside it", so a shape property that only inspects one
+statement's own form needs no traversal of its own.
+-/
+
+mutual
+/-- Does `f` hold of `s` and of every statement nested inside it? -/
+@[expose] def Stmt.allSubstmts (f : Stmt P C → Bool) (s : Stmt P C) : Bool :=
+  f s &&
+  match s with
+  | .cmd _ | .funcDecl _ _ | .typeDecl _ _ | .exit _ _ => true
+  | .block _ bss _ => Block.allSubstmts f bss
+  | .ite _ tss ess _ => Block.allSubstmts f tss && Block.allSubstmts f ess
+  | .loop _ _ _ bss _ => Block.allSubstmts f bss
+  termination_by (Stmt.sizeOf s)
+
+/-- Does `f` hold of every statement in `ss`, including nested ones? -/
+@[expose] def Block.allSubstmts (f : Stmt P C → Bool) (ss : List (Stmt P C)) : Bool :=
+  match ss with
+  | [] => true
+  | s :: srest => Stmt.allSubstmts f s && Block.allSubstmts f srest
+  termination_by (Block.sizeOf ss)
+end
+
+---------------------------------------------------------------------
+
+/-! ### NoLoops
+
+Predicate stating that no `.loop` occurs anywhere in a statement (or block).
+Symbolic evaluation needs this: it rejects a `loop`, which is what loop
+elimination removes.
+-/
+
+@[expose] def Stmt.isNotLoop (s : Stmt P C) : Bool :=
+  match s with
+  | .loop _ _ _ _ _ => false
+  | _ => true
+
+/-- Does `s` contain no loop, at any nesting depth? -/
+@[expose] def Stmt.noLoops (s : Stmt P C) : Bool :=
+  Stmt.allSubstmts Stmt.isNotLoop s
+
+/-- Does `ss` contain no loop, at any nesting depth? -/
+@[expose] def Block.noLoops (ss : List (Stmt P C)) : Bool :=
+  Block.allSubstmts Stmt.isNotLoop ss
 
 ---------------------------------------------------------------------
 
@@ -865,7 +942,7 @@ at the loop entry block to empty.
 
 mutual
 /-- Returns true if every reachable loop has no invariants. -/
-@[expose] def Stmt.loopHasNoInvariants (s : Stmt P (Cmd P)) : Bool :=
+@[expose] def Stmt.loopHasNoInvariants (s : Stmt P C) : Bool :=
   match s with
   | .cmd _ => true
   | .block _ bss _ => Block.loopHasNoInvariants bss
@@ -878,7 +955,7 @@ mutual
   termination_by (Stmt.sizeOf s)
 
 /-- Block-level lifting of `Stmt.loopHasNoInvariants`. -/
-@[expose] def Block.loopHasNoInvariants (ss : List (Stmt P (Cmd P))) : Bool :=
+@[expose] def Block.loopHasNoInvariants (ss : List (Stmt P C)) : Bool :=
   match ss with
   | [] => true
   | s :: srest => Stmt.loopHasNoInvariants s && Block.loopHasNoInvariants srest
@@ -899,7 +976,7 @@ CFG layout.
 
 mutual
 /-- Returns true if every reachable loop has no termination measure. -/
-@[expose] def Stmt.noMeasureLoops (s : Stmt P (Cmd P)) : Bool :=
+@[expose] def Stmt.noMeasureLoops (s : Stmt P C) : Bool :=
   match s with
   | .cmd _ => true
   | .block _ bss _ => Block.noMeasureLoops bss
@@ -912,7 +989,7 @@ mutual
   termination_by (Stmt.sizeOf s)
 
 /-- Block-level lifting of `Stmt.noMeasureLoops`. -/
-@[expose] def Block.noMeasureLoops (ss : List (Stmt P (Cmd P))) : Bool :=
+@[expose] def Block.noMeasureLoops (ss : List (Stmt P C)) : Bool :=
   match ss with
   | [] => true
   | s :: srest => Stmt.noMeasureLoops s && Block.noMeasureLoops srest
@@ -1051,7 +1128,7 @@ list = weaker requirement). It checks freshness at every expression
 position — command RHS, loop/ite guard, invariant, and measure.
 
 Each leaf freshness condition "`names` avoids `vars`" is expressed as
-`List.Disjoint names vars` (i.e. `∀ z ∈ names, z ∉ vars`). -/
+`List.Disj names vars` (i.e. `∀ z ∈ names, z ∉ vars`). -/
 
 /-- "names is fresh in s": no name `z ∈ names` appears in any read position
 (cmd expression, loop guard, invariant, or measure) at any depth in `s`.  This is
@@ -1060,12 +1137,12 @@ this now checks the body free-vars too, whereas the passes run under `noFuncDecl
 so the added leaf is vacuous.) -/
 @[expose] def Stmt.namesFreshInExprs {P : PureExpr} [HasFvars P]
     (names : List P.Ident) (s : Stmt P (Cmd P)) : Prop :=
-  List.Disjoint names (Stmt.getVars s)
+  List.Disj names (Stmt.getVars s)
 
 /-- "names is fresh in ss": disjointness from the block's read-var set. -/
 @[expose] def Block.namesFreshInExprs {P : PureExpr} [HasFvars P]
     (names : List P.Ident) (ss : List (Stmt P (Cmd P))) : Prop :=
-  List.Disjoint names (Block.getVars ss)
+  List.Disj names (Block.getVars ss)
 
 /-! ## RHS-only freshness predicate `namesFreshInRhsExprs`
 
@@ -1087,11 +1164,11 @@ guard/invariant/measure read positions are NOT checked). -/
 @[expose] def Stmt.namesFreshInRhsExprs {P : PureExpr} [HasFvars P]
     (names : List P.Ident) (s : Stmt P (Cmd P)) : Prop :=
   match s with
-  | .cmd (.init _ _ rhs _) => List.Disjoint names (ExprOrNondet.getVars rhs)
-  | .cmd (.set _ rhs _) => List.Disjoint names (ExprOrNondet.getVars rhs)
-  | .cmd (.assert _ e _) => List.Disjoint names (HasFvars.getFvars e)
-  | .cmd (.assume _ e _) => List.Disjoint names (HasFvars.getFvars e)
-  | .cmd (.cover _ e _) => List.Disjoint names (HasFvars.getFvars e)
+  | .cmd (.init _ _ rhs _) => List.Disj names (ExprOrNondet.getVars rhs)
+  | .cmd (.set _ rhs _) => List.Disj names (ExprOrNondet.getVars rhs)
+  | .cmd (.assert _ e _) => List.Disj names (HasFvars.getFvars e)
+  | .cmd (.assume _ e _) => List.Disj names (HasFvars.getFvars e)
+  | .cmd (.cover _ e _) => List.Disj names (HasFvars.getFvars e)
   | .block _ bss _ => Block.namesFreshInRhsExprs names bss
   | .ite _ tss ess _ =>
     Block.namesFreshInRhsExprs names tss ∧ Block.namesFreshInRhsExprs names ess

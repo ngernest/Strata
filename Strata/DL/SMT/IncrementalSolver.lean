@@ -103,12 +103,7 @@ private def mkQuantHelper (qk : QuantifierKind)
   let vars := bindings.map fun (name, ty) => TermVar.mk name ty
   let varTerms := vars.map Term.var
   let (body, triggers) ← callback varTerms
-  let tr := match triggers with
-    | [] => Term.app .triggers [] .trigger
-    | groups =>
-      let triggerTerms := groups.map fun group => Term.app .triggers group .trigger
-      Term.app .triggers triggerTerms .trigger
-  return (Term.quant qk vars tr body)
+  return (Term.quant qk vars triggers body)
 
 /-- Shared helper for binary comparison operations. -/
 private def mkBinCmp (op : Op) (opName : String) (ts : List Term)
@@ -126,13 +121,29 @@ private def mkVarArith (op : Op) (opName : String) (ts : List Term)
     | [t] => return t
     | t :: rest => return (rest.foldl (fun acc x => Term.app op [acc, x] acc.typeOf) t)
 
-/-- Parse a solver check-sat response into a `Decision`. -/
+/-- Parse a solver check-sat response into a `Decision`, matching the whole
+    response line so that only an exact verdict token is a verdict. A solver
+    `(error "…")` diagnostic that contains the word `timeout` is not a verdict
+    line and surfaces as an error. A per-call timeout arrives as a recognized
+    verdict: z3 reports it as `unknown` on stdout (its check-sat response); cvc5
+    prints `interrupted by timeout.` on stderr, not on this stdout line. The bare
+    `timeout`/`timeout.` arms cover a solver that does emit such a line. -/
 def parseDecision (line : String) : Except String Decision :=
   match line with
   | "sat" => .ok .sat
   | "unsat" => .ok .unsat
   | "unknown" => .ok .unknown
+  | "timeout" => .ok .timeout
+  | "timeout." => .ok .timeout
   | other => .error s!"unrecognized solver output: {other}"
+
+#guard match parseDecision "timeout" with | .ok .timeout => true | _ => false
+#guard match parseDecision "unknown" with | .ok .unknown => true | _ => false
+#guard match parseDecision "sat" with | .ok .sat => true | _ => false
+#guard match parseDecision "bogus" with | .error _ => true | _ => false
+-- An error diagnostic that contains the word "timeout" surfaces as an error, not
+-- a timeout verdict.
+#guard match parseDecision "(error \"unknown parameter timeout\")" with | .error _ => true | _ => false
 
 /-- Format datatype constructors as SMT-LIB strings. -/
 private def formatConstrs (constrs : List (String × List (String × TermType)))

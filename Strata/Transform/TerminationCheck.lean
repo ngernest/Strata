@@ -347,15 +347,18 @@ where
         let fileRange := Imperative.getFileRange md |>.getD FileRange.unknown
         let throwErr (msg : String) : CoreTransformM Unit :=
           throw (Message.withRange fileRange msg)
-        -- Step 1: Validate measures and determine DecreasesKind for each function.
-        -- Skip polymorphic functions: adtRank axioms are monomorphic.
+        -- Step 1: Validate measures and determine DecreasesKind for every
+        -- function in the block, polymorphic ones included; downstream passes
+        -- specialize and check them at their ground instantiations.  Including
+        -- poly members here also keeps `funcKindMap` complete, so a monomorphic
+        -- member's recursive call to a polymorphic sibling still gets its
+        -- decrease obligation.
         let mut funcKindList : List (String × DecreasesKind × List Expression.Ident × List LMonoTy) := []
         for func in funcs do
-          if func.typeArgs.isEmpty then
-            match getDecreasesKind func tf with
-            | .error msg => throwErr msg
-            | .ok kind =>
-              funcKindList := (func.name.name, kind, func.inputs.keys, func.inputs.values) :: funcKindList
+          match getDecreasesKind func tf with
+          | .error msg => throwErr msg
+          | .ok kind =>
+            funcKindList := (func.name.name, kind, func.inputs.keys, func.inputs.values) :: funcKindList
         let funcKindMap := funcKindList.reverse
         -- Reject mutual blocks that mix structural and int-valued measures.
         let hasStructural := funcKindMap.any fun (_, k, _, _) => match k with
@@ -412,7 +415,17 @@ where
       | .type (.data block) _md => do
         tf := tf.push block
         acc := acc.push d
-      | .func _ _ | .proc _ _ | .ax _ _ | .distinct _ _ _
+      | .proc proc _ => do
+        -- A CFG body is not walked here, and the recursive calls inside one
+        -- would go unchecked. `noCFGBodies` is declared as a requirement; this
+        -- is where it is enforced.
+        match proc.body with
+        | .cfg _ =>
+          throw (Strata.Message.fromFormat
+            f!"❌ TerminationCheck: procedure {proc.header.name.name} has a CFG body; \
+               termination is only checked on structured bodies.")
+        | .structured _ => acc := acc.push d
+      | .func _ _ | .ax _ _ | .distinct _ _ _
       | .type (.con _) _ | .type (.syn _) _ => do
         acc := acc.push d
       remaining := rest
@@ -424,8 +437,19 @@ end TermCheck
     recursive functions. Model-preserving because it only adds new
     assertions and procedures. -/
 def termCheckPipelinePhase : PipelinePhase :=
-  modelPreservingPipelinePhase "termCheck" fun prog => do
-    TermCheck.termCheck prog
+  -- `noBetaRedexes` is not claimed because a call's measure is instantiated by
+  -- substituting the call's arguments, and a function-typed parameter applied to
+  -- an abstraction argument leaves a redex behind. `noPolymorphicProcedures` is
+  -- not claimed either: the procedures this adds inherit the checked function's
+  -- type arguments.
+  modelPreservingPipelinePhase "termCheck"
+    (requires := factSet![.noCFGBodies])
+    (preserves := factSet![.noCFGBodies, .noCalls, .noLoops, .noLoopInvariants,
+                         .noLoopMeasures, .staticSingleAssignment,
+                         .noPrecondsFromFuncs, .noNondetGuards,
+                         .noInternalFuncDecl, .noPolymorphicFunctions, .typeAnnotated])
+    fun prog => do
+      TermCheck.termCheck prog
 
 end Core
 
